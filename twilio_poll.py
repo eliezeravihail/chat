@@ -10,7 +10,10 @@ Env (.env, loaded automatically):
   TWILIO_ACCOUNT_SID   Twilio Account SID (AC…)
   TWILIO_AUTH_TOKEN    Twilio Auth Token
   TWILIO_FROM          sandbox number, e.g. whatsapp:+14155238886
-  ALLOWED_WA_ID        your number, e.g. whatsapp:+9725XXXXXXXX
+  ALLOWED_WA_ID        allowed number(s), comma-separated for more than one,
+                       e.g. whatsapp:+9725XXXXXXXX,whatsapp:+9725YYYYYYYY
+  STARTUP_MESSAGE      optional greeting sent to each allowed number on start
+                       (empty = don't send)
   POLL_SECONDS         optional, default 4
 
 Run:  python twilio_poll.py
@@ -35,15 +38,20 @@ def _norm(addr: str) -> str:
     return addr.replace("whatsapp:", "").replace("+", "").strip()
 
 
-ALLOWED = _norm(os.environ["ALLOWED_WA_ID"])
+# One or more allowed numbers (comma-separated). The bot ignores everyone else.
+ALLOWED = {_norm(a) for a in os.environ["ALLOWED_WA_ID"].split(",") if a.strip()}
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "4"))
+STARTUP_MESSAGE = os.environ.get(
+    "STARTUP_MESSAGE",
+    "🤖 הבוט מחובר ומוכן! פשוט כתוב לי הודעה ואענה. שלח /models לרשימת המודלים.",
+)
 
 BASE = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}"
 AUTH = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
-async def send_text(client: httpx.AsyncClient, text: str) -> None:
-    to = f"whatsapp:+{ALLOWED}"
+async def send_text(client: httpx.AsyncClient, to_digits: str, text: str) -> None:
+    to = f"whatsapp:+{to_digits}"
     for chunk in core.split_chunks(text) if text else [""]:
         r = await client.post(
             f"{BASE}/Messages.json",
@@ -76,32 +84,51 @@ async def fetch_image(client: httpx.AsyncClient, sid: str) -> str | None:
 
 async def handle(client: httpx.AsyncClient, msg: dict) -> None:
     sid = msg.get("sid", "")
-    if not sid or await core.store.seen(sid):
+    sender = _norm(msg.get("from", ""))
+    if not sid or sender not in ALLOWED or await core.store.seen(sid):
         return
     body = msg.get("body", "") or ""
     image = None
     if int(msg.get("num_media", "0") or 0) > 0:
         image = await fetch_image(client, sid)
     try:
+        # uid = sender, so each allowed number keeps its own history and model.
         if image:
-            reply = await core.ask_llm(ALLOWED, body or "מה רואים בתמונה?", image_data_uri=image)
+            reply = await core.ask_llm(sender, body or "מה רואים בתמונה?", image_data_uri=image)
         else:
-            reply = await core.handle_command(ALLOWED, body) or await core.ask_llm(ALLOWED, body)
+            reply = await core.handle_command(sender, body) or await core.ask_llm(sender, body)
     except Exception as exc:  # noqa: BLE001
         reply = f"⚠️ שגיאה: {exc!r}"
-    await send_text(client, reply)
+    await send_text(client, sender, reply)
+
+
+async def announce(client: httpx.AsyncClient) -> None:
+    """Greet each allowed number so they know the bot is live and can reply.
+
+    May fail if a number is outside WhatsApp's 24h window (hasn't messaged
+    recently) — that's fine, it's logged and ignored.
+    """
+    if not STARTUP_MESSAGE:
+        return
+    for num in ALLOWED:
+        try:
+            await send_text(client, num, STARTUP_MESSAGE)
+            print("startup message sent to", num)
+        except Exception as exc:  # noqa: BLE001
+            print("startup message to", num, "failed:", exc)
 
 
 async def main() -> None:
-    print(f"polling Twilio every {POLL_SECONDS}s — כתוב לבוט מהוואטסאפ שלך. Ctrl-C לעצור.")
+    print(f"polling Twilio every {POLL_SECONDS}s — מאזין ל: {', '.join(sorted(ALLOWED))}. Ctrl-C לעצור.")
     first = True
     async with httpx.AsyncClient(timeout=30) as client:
+        await announce(client)
         while True:
             try:
                 r = await client.get(
                     f"{BASE}/Messages.json",
                     auth=AUTH,
-                    params={"From": f"whatsapp:+{ALLOWED}", "To": TWILIO_FROM, "PageSize": 20},
+                    params={"To": TWILIO_FROM, "PageSize": 20},
                 )
                 r.raise_for_status()
                 msgs = r.json().get("messages", [])

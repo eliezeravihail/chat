@@ -9,8 +9,11 @@
  *   ALLOWED_WA_ID   the only number allowed to chat, digits only (e.g. 972501234567)
  *   CORE_URL        core service URL (default http://127.0.0.1:8090)
  *   LOCAL_TOKEN     optional shared secret, sent as X-Token to the core
+ *   PAIR_NUMBER     optional: the bot's own WhatsApp number (digits only). If set,
+ *                   the bridge prints an 8-char pairing code instead of a QR —
+ *                   no camera needed, ideal for cloud/headless/emulator setups.
  *
- * Run:  npm install && node index.js   (scan the QR once)
+ * Run:  npm install && node index.js   (scan the QR / enter the pairing code once)
  */
 
 import makeWASocket, {
@@ -24,6 +27,7 @@ import pino from "pino";
 const CORE_URL = (process.env.CORE_URL || "http://127.0.0.1:8090").replace(/\/$/, "");
 const LOCAL_TOKEN = process.env.LOCAL_TOKEN || "";
 const ALLOWED = (process.env.ALLOWED_WA_ID || "").replace(/\D/g, "");
+const PAIR_NUMBER = (process.env.PAIR_NUMBER || "").replace(/\D/g, "");
 
 if (!ALLOWED) {
   console.error("Set ALLOWED_WA_ID (digits only, e.g. 972501234567)");
@@ -61,11 +65,26 @@ async function start() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (u) => {
+  let pairingRequested = false;
+  sock.ev.on("connection.update", async (u) => {
     const { connection, lastDisconnect, qr } = u;
     if (qr) {
-      console.log("סרוק את ה-QR הבא מ-WhatsApp → מכשירים מקושרים:");
-      qrcode.generate(qr, { small: true });
+      if (PAIR_NUMBER && !pairingRequested) {
+        // Pairing-code login — no camera, works over SSH / in an emulator.
+        pairingRequested = true;
+        try {
+          const code = await sock.requestPairingCode(PAIR_NUMBER);
+          console.log("🔑 קוד צימוד:", code);
+          console.log(
+            'ב-WhatsApp של הבוט: קשר מכשיר → "קשר עם מספר טלפון במקום" → הזן את הקוד.'
+          );
+        } catch (e) {
+          console.error("pairing code failed:", e);
+        }
+      } else if (!PAIR_NUMBER) {
+        console.log("סרוק את ה-QR הבא מ-WhatsApp → מכשירים מקושרים:");
+        qrcode.generate(qr, { small: true });
+      }
     }
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;

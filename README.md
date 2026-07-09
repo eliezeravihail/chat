@@ -1,81 +1,207 @@
-# chat — WhatsApp ⇄ OpenRouter bridge
+# chat — גשר WhatsApp ⇄ OpenRouter
 
-גשר קטן שמחבר את **WhatsApp** (דרך Meta Cloud API) אל **OpenRouter**, כך שאפשר
-לשוחח עם מודלי שפה שונים ישירות מתוך צ'אט וואטסאפ. הבוט מוגבל למשתמש מורשה יחיד.
+בוט שמחבר את **WhatsApp** (דרך Meta Cloud API הרשמי) אל **OpenRouter**, וכך
+מאפשר לשוחח עם מודלי שפה (Claude / GPT / Gemini / מודלים חינמיים) ישירות מתוך
+צ'אט בוואטסאפ. הבוט נעול ל**משתמש מורשה יחיד** ועלות ההפעלה חינם או קרוב לכך.
 
-A small bridge that connects **WhatsApp** (via the Meta Cloud API) to
-**OpenRouter**, letting you chat with various LLMs straight from WhatsApp.
-Locked to a single authorized user.
+```
+WhatsApp → Meta Cloud API → Webhook (FastAPI) → OpenRouter → תשובה חזרה
+```
 
-## Features
+---
 
-- מענה של מודל שפה לכל הודעת טקסט נכנסת (למשתמש המורשה בלבד).
-- זיכרון שיחה של 12 תורים אחרונים (user + assistant).
-- החלפת מודל בזמן אמת דרך פקודות.
-- אימות חתימה `X-Hub-Signature-256` על כל webhook.
-- חלוקת תשובות ארוכות לצ'אנקים (מגבלת 4096 תווים של וואטסאפ).
+## תוכן עניינים
 
-## Commands
+1. [מה צריך לפני שמתחילים](#1-מה-צריך-לפני-שמתחילים)
+2. [OpenRouter — מפתח API](#2-openrouter--מפתח-api)
+3. [Meta / WhatsApp — הקמת האפליקציה](#3-meta--whatsapp--הקמת-האפליקציה)
+4. [הרצה מקומית (לפיתוח)](#4-הרצה-מקומית-לפיתוח)
+5. [פריסה לענן (Fly.io)](#5-פריסה-לענן-flyio)
+6. [חיבור ה-webhook ב-Meta](#6-חיבור-ה-webhook-ב-meta)
+7. [שימוש ופקודות](#7-שימוש-ופקודות)
+8. [פתרון תקלות](#8-פתרון-תקלות)
+9. [רשימת משתני סביבה](#9-רשימת-משתני-סביבה)
 
-בתוך הצ'אט בוואטסאפ:
+---
 
-| פקודה            | פעולה                                             |
-| ---------------- | ------------------------------------------------- |
-| `/models`        | הצגת המודלים הזמינים והמודל הנוכחי                 |
-| `/model <שם>`    | החלפת מודל (לפי alias או מזהה OpenRouter מלא)     |
-| `/model`         | הצגת המודל הנוכחי                                  |
-| `/clear`         | ניקוי הקשר השיחה                                   |
+## 1. מה צריך לפני שמתחילים
 
-Aliases זמינים: `claude`, `gpt`, `gemini`, `deepseek`, `llama`, `qwen`.
+- חשבון **Meta / Facebook** (רגיל — ישמש ליצירת Meta Business).
+- מספר טלפון שאפשר לקבל אליו הודעת WhatsApp לצורך בדיקה (ה-**wa_id** שלך).
+- חשבון **OpenRouter** (חינם).
+- Python 3.11+ להרצה מקומית, או חשבון **Fly.io** (חינם) לפריסה.
 
-## Environment variables
+> **הערה על אבטחה:** אם החסימה לרשת הותקנה על ידי מעסיק או גורם שאתה כפוף לו —
+> ודא שבניית ערוץ עוקף מקובלת עליהם. אם זו החלטה שלך על המכשיר שלך, אין בעיה.
 
-ראה `.env.example`. משתנים נדרשים:
+---
 
-| משתנה            | תיאור                                                          |
-| ---------------- | -------------------------------------------------------------- |
-| `WA_TOKEN`       | Meta permanent access token                                    |
-| `WA_PHONE_ID`    | Phone number ID מ-Meta Business                                |
-| `WA_VERIFY_TOKEN`| מחרוזת שרירותית; חייבת להתאים למה שמזינים ב-UI של Meta         |
-| `WA_APP_SECRET`  | App secret (לאימות `X-Hub-Signature-256`)                     |
-| `ALLOWED_WA_ID`  | ה-wa_id שלך, למשל `9725XXXXXXXX`                              |
-| `OPENROUTER_KEY` | OpenRouter API key                                            |
-| `REDIS_URL`      | Upstash `redis://` URL (אופציונלי; נופל חזרה לזיכרון פנימי)   |
+## 2. OpenRouter — מפתח API
 
-## Run locally
+1. היכנס ל-<https://openrouter.ai> והתחבר.
+2. גש ל-<https://openrouter.ai/keys> → **Create Key**.
+3. העתק את המפתח — זה הערך של `OPENROUTER_KEY`.
+
+מודלים עם סיומת `:free` (DeepSeek, Llama, Qwen, Gemini Flash) הם ללא עלות. כדי
+להשתמש ב-Claude / GPT צריך להטעין קרדיט קטן בחשבון OpenRouter.
+
+---
+
+## 3. Meta / WhatsApp — הקמת האפליקציה
+
+### 3.1 יצירת אפליקציה
+1. גש ל-<https://developers.facebook.com/apps> → **Create App**.
+2. בחר סוג **Business**.
+3. באפליקציה שנוצרה: **Add Product → WhatsApp → Set up**.
+
+### 3.2 השגת הפרטים
+בתוך **WhatsApp → API Setup** תמצא:
+- **Phone number ID** → הערך של `WA_PHONE_ID` (זה מזהה, *לא* מספר הטלפון).
+- **Temporary access token** → לשימוש זמני בלבד (ראה 3.4).
+- שדה להוספת **recipient phone number** — הוסף את המספר שלך ואשר את קוד ה-OTP.
+  המספר הזה, בפורמט בינלאומי ללא `+` (למשל `9725XXXXXXXX`), הוא `ALLOWED_WA_ID`.
+
+### 3.3 App Secret
+**App settings → Basic → App Secret → Show** → הערך של `WA_APP_SECRET`.
+
+### 3.4 טוקן קבוע (חובה!)
+הטוקן הזמני תקף **24 שעות בלבד** — בלעדיו הבוט מת למחרת. יש ליצור **System User token**:
+
+1. <https://business.facebook.com/settings> → **Users → System Users → Add**.
+2. צור system user (תפקיד Admin).
+3. **Add Assets** → בחר את האפליקציה → הרשאות מלאות.
+4. **Generate New Token** → בחר את האפליקציה → סמן `whatsapp_business_messaging`
+   ו-`whatsapp_business_management` → **Generate**.
+5. העתק את הטוקן — זה הערך של `WA_TOKEN` (שמור אותו, הוא לא יוצג שוב).
+
+### 3.5 Verify Token
+`WA_VERIFY_TOKEN` הוא מחרוזת שאתה ממציא (למשל `my-secret-verify-123`). היא צריכה
+להיות זהה כאן ובממשק ה-webhook של Meta (שלב 6).
+
+---
+
+## 4. הרצה מקומית (לפיתוח)
 
 ```bash
+# 1. שכפול והתקנה
+git clone https://github.com/eliezeravihail/chat.git
+cd chat
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # ומלא את הערכים
+
+# 2. הגדרת משתני סביבה
+cp .env.example .env      # פתח וערוך את הערכים
 set -a; source .env; set +a
+
+# 3. הרצה
 uvicorn wa_bot:app --host 0.0.0.0 --port 8080
 ```
 
-חשוף את הפורט לאינטרנט (למשל `ngrok http 8080`) והזן את ה-URL
-`https://.../webhook` ב-Meta Business כ-callback, עם `WA_VERIFY_TOKEN` כ-verify token.
-
-## Deploy
-
-הפרויקט כולל `Procfile` ומתאים לפלטפורמות כמו Railway / Render / Fly:
-
-```
-web: uvicorn wa_bot:app --host 0.0.0.0 --port ${PORT:-8080}
+בדוק שהשרת חי:
+```bash
+curl http://localhost:8080/health      # → {"status":"ok"}
 ```
 
-הגדר את משתני הסביבה בפאנל של הפלטפורמה והצבע את webhook של Meta ל-`https://<your-app>/webhook`.
+כדי ש-Meta תוכל להגיע ל-webhook המקומי, חשוף אותו לאינטרנט עם tunnel:
+```bash
+ngrok http 8080
+```
+העתק את כתובת ה-`https://...` שקיבלת — תשתמש בה בשלב 6 כ-`https://<ngrok>/webhook`.
 
-## Endpoints
+---
 
-| נתיב         | שיטה | תיאור                                    |
-| ------------ | ---- | ---------------------------------------- |
-| `/webhook`   | GET  | אימות webhook של Meta (hub.challenge)    |
-| `/webhook`   | POST | קבלת הודעות נכנסות                        |
-| `/health`    | GET  | בדיקת בריאות                              |
+## 5. פריסה לענן (Fly.io)
 
-## Notes
+הפרויקט כולל `Dockerfile` ו-`fly.toml` מוכנים.
 
-- ה-webhook תמיד מחזיר `200` מהר, ומעבד את ההודעה ברקע — Meta עושה retry על timeout,
-  מה שהיה גורם לתשובות כפולות.
-- מצב ברירת המחדל שומר היסטוריה וזיכרון מודל בזיכרון התהליך. להרצה עם כמה אינסטנסים
-  או שמירה לאורך זמן — חבר את `REDIS_URL` (Upstash) לפי ההערה בקוד.
+```bash
+# התקנת ה-CLI והתחברות
+curl -L https://fly.io/install.sh | sh
+fly auth login
+
+# יצירת האפליקציה (בחר שם ייחודי; ערוך את app ב-fly.toml בהתאם)
+fly launch --no-deploy
+
+# הזרקת הסודות
+fly secrets set \
+  WA_TOKEN=... \
+  WA_PHONE_ID=... \
+  WA_VERIFY_TOKEN=... \
+  WA_APP_SECRET=... \
+  ALLOWED_WA_ID=... \
+  OPENROUTER_KEY=...
+
+# פריסה
+fly deploy
+```
+
+כתובת ה-webhook שלך תהיה `https://<app-name>.fly.dev/webhook`.
+
+> אלטרנטיבה: המאגר כולל גם `Procfile`, כך שאפשר לפרוס ב-**Render** או **Railway**
+> בלי שינויים — פשוט הגדר שם את אותם משתני הסביבה.
+
+---
+
+## 6. חיבור ה-webhook ב-Meta
+
+ב-**Meta app → WhatsApp → Configuration → Webhook → Edit**:
+
+| שדה | ערך |
+| --- | --- |
+| **Callback URL** | `https://<host>/webhook` (Fly.io או ngrok) |
+| **Verify token** | הערך של `WA_VERIFY_TOKEN` |
+
+לחץ **Verify and Save** — Meta תשלח `GET /webhook`, והשרת יחזיר את ה-challenge.
+לאחר מכן, תחת **Webhook fields**, לחץ **Subscribe** על השדה **`messages`**.
+
+---
+
+## 7. שימוש ופקודות
+
+שלח הודעת WhatsApp למספר הבוט מהמספר המורשה — תקבל תשובה מהמודל.
+
+| פקודה | פעולה |
+| --- | --- |
+| `/models` | רשימת המודלים הזמינים והמודל הנוכחי |
+| `/model <שם>` | החלפת מודל (מאפס את ההקשר) |
+| `/model` | הצגת המודל הנוכחי |
+| `/clear` | ניקוי היסטוריית השיחה |
+
+**Aliases:** `claude`, `gpt`, `gemini`, `deepseek`, `llama`, `qwen`. אפשר גם להעביר
+מזהה OpenRouter מלא, למשל `/model anthropic/claude-sonnet-4.5`.
+
+---
+
+## 8. פתרון תקלות
+
+| תסמין | סיבה סבירה | פתרון |
+| --- | --- | --- |
+| ה-webhook לא עובר verify | verify token לא תואם | ודא ש-`WA_VERIFY_TOKEN` זהה בקוד ובממשק Meta |
+| `403 bad signature` בלוגים | `WA_APP_SECRET` שגוי | העתק מחדש מ-App settings → Basic |
+| אין תשובה בכלל | המספר לא ב-whitelist | ודא ש-`ALLOWED_WA_ID` שווה בדיוק ל-wa_id ששולח (ללא `+`) |
+| תשובות כפולות | קריאת LLM חוסמת את ה-webhook | הקוד כבר מחזיר `200` מיד ומריץ ברקע — ודא שאתה על הגרסה הזו |
+| הבוט מת אחרי יום | נעשה שימוש בטוקן הזמני | החלף ל-System User token (שלב 3.4) |
+| `⚠️ שגיאת מודל` על אורך | context window של מודל חינמי קטן | הורד את `HISTORY_TURNS` ב-`wa_bot.py` |
+| היסטוריה נמחקת ב-restart | מצב in-memory | חבר `REDIS_URL` (Upstash) — ראה ההערה בקוד |
+
+---
+
+## 9. רשימת משתני סביבה
+
+ראה `.env.example`. סיכום:
+
+| משתנה | חובה | תיאור |
+| --- | :---: | --- |
+| `WA_TOKEN` | ✅ | System User access token קבוע |
+| `WA_PHONE_ID` | ✅ | Phone number ID מ-Meta (מזהה, לא מספר) |
+| `WA_VERIFY_TOKEN` | ✅ | מחרוזת שרירותית, זהה למה שמוזן ב-Meta |
+| `WA_APP_SECRET` | ✅ | App secret, לאימות `X-Hub-Signature-256` |
+| `ALLOWED_WA_ID` | ✅ | ה-wa_id היחיד המורשה, למשל `9725XXXXXXXX` |
+| `OPENROUTER_KEY` | ✅ | מפתח OpenRouter |
+| `REDIS_URL` | ➖ | Upstash `redis://` (אופציונלי; נופל חזרה לזיכרון) |
+
+---
+
+## רישיון
+
+[MIT](LICENSE) © 2026 Eliezer Avihail

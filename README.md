@@ -1,261 +1,231 @@
 # chat — גשר WhatsApp ⇄ OpenRouter
 
-בוט שמחבר את **WhatsApp** (דרך Meta Cloud API הרשמי) אל **OpenRouter**, וכך
-מאפשר לשוחח עם מודלי שפה (Claude / GPT / Gemini / מודלים חינמיים) ישירות מתוך
-צ'אט בוואטסאפ. הבוט נעול ל**משתמש מורשה יחיד** ועלות ההפעלה חינם או קרוב לכך.
+בוט שמחבר את **WhatsApp** אל **OpenRouter**, ומאפשר לשוחח עם מודלי שפה
+(Claude / GPT / Gemini / מודלים חינמיים) ישירות מצ'אט וואטסאפ — שיחה טבעית
+בעברית, עם זיכרון ושאלות על תמונות. הבוט נעול ל**משתמש מורשה יחיד**.
 
 ```
-WhatsApp → Meta Cloud API → Webhook (FastAPI) → OpenRouter → תשובה חזרה
+WhatsApp → Twilio → Webhook (FastAPI) → OpenRouter → תשובה חזרה
 ```
+
+יש **שני מתאמים**, חולקים את אותה ליבה (`core.py`):
+
+| מתאם | קובץ | דורש חשבון פייסבוק? |
+| --- | --- | :---: |
+| **Twilio** (ברירת מחדל) | `twilio_bot.py` | ❌ לא |
+| **Meta Cloud API** | `wa_bot.py` | ✅ כן |
+
+המדריך הזה מתמקד ב-**Twilio** (ללא פייסבוק). להקמה מול Meta ראה [נספח A](#נספח-a--meta-cloud-api).
 
 ---
 
 ## תוכן עניינים
 
-1. [מה צריך לפני שמתחילים](#1-מה-צריך-לפני-שמתחילים)
-2. [OpenRouter — מפתח API](#2-openrouter--מפתח-api)
-3. [Meta / WhatsApp — הקמת האפליקציה](#3-meta--whatsapp--הקמת-האפליקציה)
-4. [הרצה מקומית (לפיתוח)](#4-הרצה-מקומית-לפיתוח)
-5. [פריסה לענן (Fly.io)](#5-פריסה-לענן-flyio)
-6. [חיבור ה-webhook ב-Meta](#6-חיבור-ה-webhook-ב-meta)
-7. [שימוש ופקודות](#7-שימוש-ופקודות)
-8. [פתרון תקלות](#8-פתרון-תקלות)
-9. [רשימת משתני סביבה](#9-רשימת-משתני-סביבה)
+1. [OpenRouter — מפתח API](#1-openrouter--מפתח-api)
+2. [Twilio — הקמת WhatsApp](#2-twilio--הקמת-whatsapp)
+3. [הרצה מקומית](#3-הרצה-מקומית)
+4. [פריסה לענן (Fly.io)](#4-פריסה-לענן-flyio)
+5. [זיכרון מתמשך (Upstash Redis)](#5-זיכרון-מתמשך-upstash-redis)
+6. [שימוש ופקודות](#6-שימוש-ופקודות)
+7. [פתרון תקלות](#7-פתרון-תקלות)
+8. [משתני סביבה](#8-משתני-סביבה)
+- [נספח A — Meta Cloud API](#נספח-a--meta-cloud-api)
 
----
-
-## 1. מה צריך לפני שמתחילים
-
-- חשבון **Meta / Facebook** (רגיל — ישמש ליצירת Meta Business).
-- מספר טלפון שאפשר לקבל אליו הודעת WhatsApp לצורך בדיקה (ה-**wa_id** שלך).
-- חשבון **OpenRouter** (חינם).
-- Python 3.11+ להרצה מקומית, או חשבון **Fly.io** (חינם) לפריסה.
-
-> **הערה על אבטחה:** אם החסימה לרשת הותקנה על ידי מעסיק או גורם שאתה כפוף לו —
-> ודא שבניית ערוץ עוקף מקובלת עליהם. אם זו החלטה שלך על המכשיר שלך, אין בעיה.
-
-> **הערה על מדיניות Meta (ינואר 2026):** תנאי ה-Business API של WhatsApp אוסרים
+> **הערה על מדיניות Meta (ינואר 2026):** תנאי ה-WhatsApp Business API אוסרים
 > צ'אטבוטים כלליים של AI כ"פונקציונליות עיקרית" (זו הסיבה ש-1-800-ChatGPT נסגר).
-> בוט אישי בנפח זעיר למשתמש יחיד — סבירות אכיפה נמוכה, אבל קיים סיכון תיאורטי
-> לחסימת המספר. מומלץ: נפח נמוך, לא לפרסם את המספר, ולדעת שקיימת חלופה קלה
-> במקרה הצורך (Telegram Bot API — ללא איסור דומה, אותה ארכיטקטורה).
+> זה חל גם על Twilio (שרץ מעל התשתית של Meta) וגם על Meta ישירות. בוט אישי בנפח
+> זעיר למשתמש יחיד — סבירות אכיפה נמוכה, אך קיים סיכון תיאורטי לחסימה. מומלץ נפח
+> נמוך ולא לפרסם את המספר. חלופה ללא איסור דומה: Telegram Bot API (אותה ליבה).
 
 ---
 
-## 2. OpenRouter — מפתח API
+## 1. OpenRouter — מפתח API
 
 1. היכנס ל-<https://openrouter.ai> והתחבר.
 2. גש ל-<https://openrouter.ai/keys> → **Create Key**.
 3. העתק את המפתח — זה הערך של `OPENROUTER_KEY`.
 
-מודלים עם סיומת `:free` (DeepSeek, Llama, Qwen, Gemini Flash) הם ללא עלות. כדי
+מודלים עם סיומת `:free` (DeepSeek, Llama, Qwen, Gemini Flash) ללא עלות. כדי
 להשתמש ב-Claude / GPT צריך להטעין קרדיט קטן בחשבון OpenRouter.
 
 ---
 
-## 3. Meta / WhatsApp — הקמת האפליקציה
+## 2. Twilio — הקמת WhatsApp
 
-### 3.1 יצירת אפליקציה
-1. גש ל-<https://developers.facebook.com/apps> → **Create App**.
-2. בחר סוג **Business**.
-3. באפליקציה שנוצרה: **Add Product → WhatsApp → Set up**.
+### 2.1 חשבון ופרטים
+1. פתח חשבון ב-<https://www.twilio.com/try-twilio> (ללא פייסבוק).
+2. ב-<https://console.twilio.com> תמצא בעמוד הראשי:
+   - **Account SID** → `TWILIO_ACCOUNT_SID`
+   - **Auth Token** → `TWILIO_AUTH_TOKEN`
 
-### 3.2 השגת הפרטים
-בתוך **WhatsApp → API Setup** תמצא:
-- **Phone number ID** → הערך של `WA_PHONE_ID` (זה מזהה, *לא* מספר הטלפון).
-- **Temporary access token** → לשימוש זמני בלבד (ראה 3.4).
-- שדה להוספת **recipient phone number** — הוסף את המספר שלך ואשר את קוד ה-OTP.
-  המספר הזה, בפורמט בינלאומי ללא `+` (למשל `9725XXXXXXXX`), הוא `ALLOWED_WA_ID`.
+### 2.2 הפעלת WhatsApp Sandbox
+1. ב-Console: **Messaging → Try it out → Send a WhatsApp message**.
+2. תקבל מספר sandbox (בד"כ `+1 415 523 8886`) וקוד הצטרפות (`join <word>`).
+   המספר הזה הוא `TWILIO_FROM` בפורמט `whatsapp:+14155238886`.
+3. מהוואטסאפ שלך, שלח `join <word>` למספר ה-sandbox. מהרגע הזה המספר שלך מחובר
+   ל-sandbox (צריך לחזור על זה אם עוברים 72 שעות ללא פעילות).
+4. המספר שלך, למשל `whatsapp:+9725XXXXXXXX`, הוא `ALLOWED_WA_ID`.
 
-### 3.3 App Secret
-**App settings → Basic → App Secret → Show** → הערך של `WA_APP_SECRET`.
-
-### 3.4 טוקן קבוע (חובה!)
-הטוקן הזמני תקף **24 שעות בלבד** — בלעדיו הבוט מת למחרת. יש ליצור **System User token**:
-
-1. <https://business.facebook.com/settings> → **Users → System Users → Add**.
-2. צור system user (תפקיד Admin).
-3. **Add Assets** → בחר את האפליקציה → הרשאות מלאות.
-4. **Generate New Token** → בחר את האפליקציה → סמן `whatsapp_business_messaging`
-   ו-`whatsapp_business_management` → **Generate**.
-5. העתק את הטוקן — זה הערך של `WA_TOKEN` (שמור אותו, הוא לא יוצג שוב).
-
-### 3.5 Verify Token
-`WA_VERIFY_TOKEN` הוא מחרוזת שאתה ממציא (למשל `my-secret-verify-123`). היא צריכה
-להיות זהה כאן ובממשק ה-webhook של Meta (שלב 6).
+> **פרודקשן:** למספר ייעודי ללא הגבלת ה-sandbox צריך WhatsApp Sender מאושר
+> ב-Twilio (כרוך בתשלום per-message). ה-sandbox מספיק למשתמש יחיד.
 
 ---
 
-## 4. הרצה מקומית (לפיתוח)
+## 3. הרצה מקומית
 
 ```bash
-# 1. שכפול והתקנה
 git clone https://github.com/eliezeravihail/chat.git
 cd chat
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. הגדרת משתני סביבה
-cp .env.example .env      # פתח וערוך את הערכים
+cp .env.example .env      # ערוך את הערכים (Twilio + OpenRouter)
 set -a; source .env; set +a
 
-# 3. הרצה
-uvicorn wa_bot:app --host 0.0.0.0 --port 8080
+uvicorn twilio_bot:app --host 0.0.0.0 --port 8080
 ```
 
-בדוק שהשרת חי:
-```bash
-curl http://localhost:8080/health      # → {"status":"ok"}
-```
+בדיקה: `curl http://localhost:8080/health` → `{"status":"ok"}`
 
-כדי ש-Meta תוכל להגיע ל-webhook המקומי, חשוף אותו לאינטרנט עם tunnel:
+כדי ש-Twilio יגיע ל-webhook המקומי, חשוף אותו עם tunnel והגדר `PUBLIC_URL`:
 ```bash
-ngrok http 8080
+ngrok http 8080          # העתק את כתובת ה-https
+export PUBLIC_URL=https://<ngrok-id>.ngrok-free.app
 ```
-העתק את כתובת ה-`https://...` שקיבלת — תשתמש בה בשלב 6 כ-`https://<ngrok>/webhook`.
+ואז ב-**Twilio Console → Sandbox settings → "When a message comes in"**:
+`https://<ngrok-id>.ngrok-free.app/webhook` (method **POST**).
 
 ---
 
-## 5. פריסה לענן (Fly.io)
+## 4. פריסה לענן (Fly.io)
 
-הפרויקט כולל `Dockerfile` ו-`fly.toml` מוכנים.
+הפרויקט כולל `Dockerfile` ו-`fly.toml` (ברירת מחדל: `twilio_bot`).
 
 ```bash
-# התקנת ה-CLI והתחברות
 curl -L https://fly.io/install.sh | sh
 fly auth login
+fly launch --no-deploy               # בחר שם ייחודי; עדכן app ב-fly.toml
 
-# יצירת האפליקציה (בחר שם ייחודי; ערוך את app ב-fly.toml בהתאם)
-fly launch --no-deploy
-
-# הזרקת הסודות
 fly secrets set \
-  WA_TOKEN=... \
-  WA_PHONE_ID=... \
-  WA_VERIFY_TOKEN=... \
-  WA_APP_SECRET=... \
-  ALLOWED_WA_ID=... \
+  TWILIO_ACCOUNT_SID=... \
+  TWILIO_AUTH_TOKEN=... \
+  TWILIO_FROM="whatsapp:+14155238886" \
+  ALLOWED_WA_ID="whatsapp:+9725XXXXXXXX" \
+  PUBLIC_URL="https://<app-name>.fly.dev" \
   OPENROUTER_KEY=...
 
-# פריסה
 fly deploy
 ```
 
-כתובת ה-webhook שלך תהיה `https://<app-name>.fly.dev/webhook`.
+לבסוף, הצבע את ה-webhook של Twilio (שלב 2.2) אל
+`https://<app-name>.fly.dev/webhook`.
 
-> אלטרנטיבה: המאגר כולל גם `Procfile`, כך שאפשר לפרוס ב-**Render** או **Railway**
-> בלי שינויים — פשוט הגדר שם את אותם משתני הסביבה.
-
-### זיכרון שיחה מתמשך (Upstash Redis) — מומלץ בפרודקשן
-
-וואטסאפ שולח רק את ההודעה **החדשה** בכל פעם, לכן הבוט הוא זה ששומר את היסטוריית
-השיחה. בברירת מחדל הזיכרון נשמר בזיכרון התהליך (in-memory) — מה שנמחק בכל
-restart/redeploy, וגם כשמכונת Fly נכבית אוטומטית בזמן חוסר פעילות
-(`auto_stop_machines`). כדי שתוכל **להמשיך שיחה בכל זמן**, חבר Redis:
-
-1. פתח חשבון חינם ב-<https://upstash.com> → **Create Database** (Redis).
-2. העתק את ה-**`redis://` / `rediss://` URL** (כולל הסיסמה).
-3. הגדר אותו כסוד:
-   ```bash
-   fly secrets set REDIS_URL="rediss://default:<password>@<host>:<port>"
-   ```
-
-ברגע ש-`REDIS_URL` מוגדר, הבוט עובר אוטומטית ל-Redis: ההיסטוריה נשמרת תחת
-`hist:{wa_id}` עם TTL של 24 שעות, והמודל הנבחר תחת `model:{wa_id}`. אם המשתנה לא
-מוגדר — נופלים חזרה לזיכרון פנימי (מספיק לפיתוח מקומי). בהפעלה תראה בלוגים
-`state backend: RedisStore` או `MemoryStore`.
+> אלטרנטיבה: יש גם `Procfile` ל-**Render / Railway**. המשתנה `APP_MODULE`
+> בוחר מתאם (`twilio_bot:app` ברירת מחדל, או `wa_bot:app` ל-Meta).
 
 ---
 
-## 6. חיבור ה-webhook ב-Meta
+## 5. זיכרון מתמשך (Upstash Redis)
 
-ב-**Meta app → WhatsApp → Configuration → Webhook → Edit**:
+וואטסאפ שולח רק את ההודעה **החדשה** בכל פעם, לכן הבוט שומר את היסטוריית השיחה.
+בברירת מחדל הזיכרון נשמר בזיכרון התהליך (נמחק ב-restart/redeploy). כדי **להמשיך
+שיחה בכל זמן**, חבר Redis:
 
-| שדה | ערך |
-| --- | --- |
-| **Callback URL** | `https://<host>/webhook` (Fly.io או ngrok) |
-| **Verify token** | הערך של `WA_VERIFY_TOKEN` |
+1. חשבון חינם ב-<https://upstash.com> → **Create Database** (Redis).
+2. העתק את ה-`redis://` / `rediss://` URL.
+3. `fly secrets set REDIS_URL="rediss://default:<password>@<host>:<port>"`
 
-לחץ **Verify and Save** — Meta תשלח `GET /webhook`, והשרת יחזיר את ה-challenge.
-לאחר מכן, תחת **Webhook fields**, לחץ **Subscribe** על השדה **`messages`**.
+עם `REDIS_URL` מוגדר: היסטוריה תחת `hist:{id}` (TTL 30 יום), מודל תחת
+`model:{id}`, ודה-דופליקציה תחת `seen:{id}`. בלעדיו — זיכרון פנימי. בהפעלה
+מודפס בלוג `state backend: RedisStore` או `MemoryStore`.
 
 ---
 
-## 7. שימוש ופקודות
+## 6. שימוש ופקודות
 
-שלח הודעת WhatsApp למספר הבוט מהמספר המורשה — תקבל תשובה מהמודל.
+שלח הודעת WhatsApp מהמספר המורשה — תקבל תשובה מהמודל.
 
 | פקודה | פעולה |
 | --- | --- |
-| `/models` | רשימת המודלים הזמינים והמודל הנוכחי |
-| `/model <שם>` | החלפת מודל (מאפס את ההקשר) |
+| `/models` | רשימת המודלים והמודל הנוכחי |
+| `/model <שם>` | החלפת מודל (מאפס הקשר) |
 | `/model` | הצגת המודל הנוכחי |
 | `/clear` | ניקוי היסטוריית השיחה |
 
-**Aliases:** `claude`, `gpt`, `gemini`, `deepseek`, `llama`, `qwen`. אפשר גם להעביר
-מזהה OpenRouter מלא, למשל `/model anthropic/claude-sonnet-4.5`.
+**Aliases:** `claude`, `gpt`, `gemini`, `deepseek`, `llama`, `qwen`, או מזהה
+OpenRouter מלא (`/model anthropic/claude-sonnet-4.5`).
 
 ### קריאת תמונות (Vision)
+שליחת תמונה (עם/בלי כיתוב) — הבוט מוריד אותה ושולח למודל ראייה. כיתוב ריק →
+שאלת ברירת מחדל ("מה רואים בתמונה?"). בהיסטוריה נשמר רק סמן `[תמונה]`, לא ה-blob.
+*יצירת* תמונות אינה נתמכת — קריאה בלבד.
 
-שליחת **תמונה** בוואטסאפ (עם או בלי כיתוב) — הבוט מוריד אותה מ-Meta ושולח למודל
-ראייה שינתח אותה. אם הכיתוב ריק, נשלחת שאלת ברירת מחדל ("מה רואים בתמונה?").
-בהיסטוריית השיחה נשמר רק סמן טקסטואלי `[תמונה]` (לא ה-blob), כדי לא לנפח את הזיכרון
-ולא לשלוח את התמונה שוב בכל תור. *יצירת* תמונות אינה נתמכת — קריאה בלבד.
-
-### מעבר אוטומטי בין מודלים (Fallback)
-
-ברירת המחדל היא מודל חינמי (`deepseek/deepseek-chat-v3-0324:free`); מעבר למודל
-מתקדם בכל רגע עם `/model claude` (דורש קרדיט ב-OpenRouter). כשהמודל המועדף אינו
-זמין (חריגה ממכסה, rate-limit, מודל שהוצא משימוש, או תקלת ספק), הבוט עונה **באותו
-תור** עם המודל החינמי הבא ברשימה ומודיע לך על כך — אבל **לא מחליף את ההעדפה**:
-בהודעה הבאה הוא ינסה שוב את המודל המועדף, כך שתקלה רגעית לא "מורידה" אותך לצמיתות
-למודל חלש. שרשראות ה-fallback:
-
+### מעבר אוטומטי בין מודלים
+ברירת המחדל חינמית (`deepseek`). כשהמודל המועדף לא זמין (מכסה / rate-limit /
+תקלה), הבוט עונה **באותו תור** עם המודל הבא ומודיע — אך **לא מחליף את ההעדפה**,
+כך שתקלה רגעית לא מורידה אותך לצמיתות. שרשראות:
 - טקסט: `deepseek → llama → qwen → gemini`
-- ראייה: `claude/gpt (אם זה המועדף) → gemini → llama-3.2-vision → qwen-vl`
+- ראייה: `claude/gpt (אם מועדף) → gemini → llama-3.2-vision → qwen-vl`
 
-מודל שכבר לא קיים פשוט מחזיר שגיאה והלולאה ממשיכה הלאה — כך שהשרשרת מרפאת את עצמה.
-החלפת מודל קבועה: `/model <שם>`.
+מודל שהוצא משימוש פשוט מחזיר שגיאה והלולאה ממשיכה — השרשרת מרפאת את עצמה.
 
 ### שיחה טבעית
-
-- **System prompt** מכוון לעברית, לתמציתיות ולפורמט של וואטסאפ.
-- **המרת Markdown** אוטומטית לפורמט וואטסאפ (`**` → `*`, כותרות `#` → מודגש, `-` → `•`).
-- **וי כחול + "מקליד..."** — הבוט מסמן את ההודעה כנקראה ומציג חיווי הקלדה בזמן
-  שהמודל חושב.
-- **זיכרון 30 יום / 40 הודעות** — אפשר לחזור לשיחה מתי שרוצים.
-- **דה-דופליקציה** — Meta מוסרת הודעות at-least-once; כל הודעה מטופלת פעם אחת בלבד,
-  וגם backlog ישן שמשוחרר אחרי downtime לא יוצף בתשובות.
+- **System prompt** מכוון לעברית, לתמציתיות ולפורמט וואטסאפ.
+- **המרת Markdown** אוטומטית (`**`→`*`, כותרות→מודגש, `-`→`•`).
+- **זיכרון 30 יום / 40 הודעות**.
+- **דה-דופליקציה** — כל הודעה מטופלת פעם אחת (Twilio/Meta מוסרים at-least-once).
+- **"מקליד..." + וי כחול** — במתאם Meta בלבד (Twilio לא חושף API לזה).
 
 ---
 
-## 8. פתרון תקלות
+## 7. פתרון תקלות
 
 | תסמין | סיבה סבירה | פתרון |
 | --- | --- | --- |
-| ה-webhook לא עובר verify | verify token לא תואם | ודא ש-`WA_VERIFY_TOKEN` זהה בקוד ובממשק Meta |
-| `403 bad signature` בלוגים | `WA_APP_SECRET` שגוי | העתק מחדש מ-App settings → Basic |
-| אין תשובה בכלל | המספר לא ב-whitelist | ודא ש-`ALLOWED_WA_ID` שווה בדיוק ל-wa_id ששולח (ללא `+`) |
-| תשובות כפולות | קריאת LLM חוסמת את ה-webhook | הקוד כבר מחזיר `200` מיד ומריץ ברקע — ודא שאתה על הגרסה הזו |
-| הבוט מת אחרי יום | נעשה שימוש בטוקן הזמני | החלף ל-System User token (שלב 3.4) |
-| `⚠️ שגיאת מודל` על אורך | context window של מודל חינמי קטן | הורד את `HISTORY_TURNS` ב-`wa_bot.py` |
-| היסטוריה נמחקת ב-restart | מצב in-memory | חבר `REDIS_URL` (Upstash) — ראה ההערה בקוד |
+| `403 bad signature` בלוגים | `PUBLIC_URL` לא תואם ל-URL האמיתי | ודא ש-`PUBLIC_URL` זהה לכתובת שהוגדרה ב-Twilio (כולל https, בלי `/` בסוף) |
+| אין תשובה בכלל | המספר לא ב-whitelist | ודא ש-`ALLOWED_WA_ID` הוא בדיוק המספר ששולח |
+| "join again" מ-Twilio | פג תוקף ה-sandbox | שלח שוב `join <word>` למספר ה-sandbox |
+| התמונה לא נקראת | המודל הנוכחי לא vision | תמונות עוברות אוטומטית ל-gemini; אם עדיין נכשל, נסה `/model gemini` |
+| היסטוריה נמחקת ב-restart | מצב in-memory | חבר `REDIS_URL` (שלב 5) |
+| הבוט "שכח" באמצע | חריגת אורך במודל חינמי | הורד `HISTORY_TURNS` ב-`core.py` או עבור למודל גדול יותר |
 
 ---
 
-## 9. רשימת משתני סביבה
+## 8. משתני סביבה
 
-ראה `.env.example`. סיכום:
+ראה `.env.example`. סיכום (מתאם Twilio):
 
 | משתנה | חובה | תיאור |
 | --- | :---: | --- |
-| `WA_TOKEN` | ✅ | System User access token קבוע |
-| `WA_PHONE_ID` | ✅ | Phone number ID מ-Meta (מזהה, לא מספר) |
-| `WA_VERIFY_TOKEN` | ✅ | מחרוזת שרירותית, זהה למה שמוזן ב-Meta |
-| `WA_APP_SECRET` | ✅ | App secret, לאימות `X-Hub-Signature-256` |
-| `ALLOWED_WA_ID` | ✅ | ה-wa_id היחיד המורשה, למשל `9725XXXXXXXX` |
+| `TWILIO_ACCOUNT_SID` | ✅ | Account SID מ-Twilio Console |
+| `TWILIO_AUTH_TOKEN` | ✅ | Auth Token (גם ל-REST וגם לאימות חתימה) |
+| `TWILIO_FROM` | ✅ | מספר השולח, למשל `whatsapp:+14155238886` |
+| `ALLOWED_WA_ID` | ✅ | המספר היחיד המורשה, למשל `whatsapp:+9725XXXXXXXX` |
+| `PUBLIC_URL` | ➖ | כתובת ציבורית לאימות חתימת Twilio (מומלץ מאוד) |
 | `OPENROUTER_KEY` | ✅ | מפתח OpenRouter |
-| `REDIS_URL` | ➖ | Upstash `redis://` — מומלץ בפרודקשן לזיכרון שיחה מתמשך; ללא זה נופלים לזיכרון פנימי |
+| `REDIS_URL` | ➖ | Upstash `redis://` לזיכרון מתמשך |
+| `APP_MODULE` | ➖ | בחירת מתאם: `twilio_bot:app` (ברירת מחדל) / `wa_bot:app` |
+
+---
+
+## נספח A — Meta Cloud API
+
+מתאם חלופי (`wa_bot.py`) עבור מי שכן רוצה להשתמש ב-WhatsApp Cloud API הרשמי של
+Meta. **דורש חשבון Meta/Facebook Business.** הגדר `APP_MODULE=wa_bot:app`.
+
+1. **אפליקציה:** <https://developers.facebook.com/apps> → Create App (Business)
+   → Add Product → WhatsApp.
+2. **פרטים** (WhatsApp → API Setup): `WA_PHONE_ID` (Phone number ID),
+   והוסף את המספר שלך כ-recipient. המספר (`9725XXXXXXXX`) הוא `ALLOWED_WA_ID`.
+3. **App Secret:** App settings → Basic → `WA_APP_SECRET`.
+4. **טוקן קבוע (חובה):** הטוקן הזמני תקף 24 שעות. צור **System User token** ב-
+   <https://business.facebook.com/settings> עם ההרשאות `whatsapp_business_messaging`
+   ו-`whatsapp_business_management` → `WA_TOKEN`.
+5. **Verify token:** מחרוזת שאתה ממציא → `WA_VERIFY_TOKEN`.
+6. **Webhook** (WhatsApp → Configuration): Callback `https://<host>/webhook`,
+   Verify token כנ"ל, ואז **Subscribe** לשדה `messages`.
+
+הרצה: `uvicorn wa_bot:app ...`. מתאם זה מוסיף חיווי "מקליד..." ווי כחול.
 
 ---
 

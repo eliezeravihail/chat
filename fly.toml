@@ -5,12 +5,15 @@ primary_region = "fra"
 
 [build]
 
+# min_machines_running = 1: the webhook returns 200 immediately and the LLM
+# call runs as a background task with no open connection, so an auto-stopped
+# machine would be killed mid-reply.
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [[http_service.checks]]
     interval = "30s"

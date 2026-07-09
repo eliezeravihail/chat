@@ -20,6 +20,8 @@ import hashlib
 import hmac
 import json
 import os
+import re
+import time
 from collections import defaultdict, deque
 from typing import Any
 
@@ -36,7 +38,8 @@ OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 GRAPH = f"https://graph.facebook.com/v21.0/{WA_PHONE_ID}/messages"
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 
-DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324:free"
+# The client gets an advanced model by default; free models are fallback only.
+DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
 MODEL_ALIASES = {
     "claude": "anthropic/claude-sonnet-4.5",
     "gpt": "openai/gpt-4o",
@@ -46,29 +49,42 @@ MODEL_ALIASES = {
     "qwen": "qwen/qwen-2.5-72b-instruct:free",
 }
 
-# Free models tried in order when the active one is unavailable (rate-limited,
-# out of quota, deprecated, or provider error). A model that no longer exists
-# simply errors and the loop moves on, so the chain is self-healing.
+# Models tried in order when the preferred one is unavailable (rate-limited,
+# out of quota, deprecated, or provider error). The switch is per-turn only:
+# the user's preferred model is retried on every new message. A model that no
+# longer exists simply errors and the loop moves on, so the chain self-heals.
 TEXT_FALLBACKS = [
     "deepseek/deepseek-chat-v3-0324:free",
     "meta-llama/llama-3.3-70b-instruct:free",
     "qwen/qwen-2.5-72b-instruct:free",
     "google/gemini-2.0-flash-exp:free",
 ]
-# Vision-capable free models (accept image input). Used when a message
-# contains an image; ordered by reliability.
+# Models that accept image input, used for picture messages.
 VISION_FALLBACKS = [
     "google/gemini-2.0-flash-exp:free",
     "meta-llama/llama-3.2-11b-vision-instruct:free",
     "qwen/qwen-2.5-vl-72b-instruct:free",
 ]
-VISION_MODELS = set(VISION_FALLBACKS)
+VISION_MODELS = set(VISION_FALLBACKS) | {
+    "anthropic/claude-sonnet-4.5",
+    "openai/gpt-4o",
+}
+
+SYSTEM_PROMPT = (
+    "אתה עוזר אישי שמשוחח בוואטסאפ. ענה בשפה שבה המשתמש כותב (ברירת מחדל: עברית), "
+    "בטון טבעי וזורם של שיחה, ובתמציתיות — זו הודעת וואטסאפ, לא מסמך. "
+    "עיצוב טקסט: וואטסאפ בלבד — *הדגשה* בכוכבית אחת, _הטיה_ בקו תחתון, ```קוד``` בגרשיים משולשים. "
+    "אל תשתמש בכותרות Markdown (#), בטבלאות או בהדגשה בכוכבית כפולה. "
+    "פסקאות קצרות; רשימות עם • או מספרים. אמוג'י במידה וכשזה מוסיף."
+)
 
 REDIS_URL = os.environ.get("REDIS_URL")
 
-WA_MAX_CHARS = 4000       # actual cap is 4096; leave headroom
-HISTORY_TURNS = 12        # user+assistant messages retained
-HISTORY_TTL = 60 * 60 * 24  # keys expire 24h after the last message
+WA_MAX_CHARS = 4000            # actual cap is 4096; leave headroom
+HISTORY_TURNS = 40             # user+assistant messages retained
+HISTORY_TTL = 60 * 60 * 24 * 30  # conversation kept 30 days after last message
+SEEN_TTL = 60 * 60             # dedup window for webhook redeliveries
+MAX_MSG_AGE = 300              # ignore messages older than 5 min (webhook backlog replay)
 
 app = FastAPI()
 
@@ -85,6 +101,7 @@ class MemoryStore:
     def __init__(self) -> None:
         self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_TURNS))
         self._model: dict[str, str] = {}
+        self._seen: deque = deque(maxlen=1000)
 
     async def get_history(self, wa_id: str) -> list[dict]:
         return list(self._history[wa_id])
@@ -101,6 +118,13 @@ class MemoryStore:
 
     async def set_model(self, wa_id: str, model: str) -> None:
         self._model[wa_id] = model
+
+    async def seen(self, msg_id: str) -> bool:
+        """True if this message id was already processed (marks it as seen)."""
+        if msg_id in self._seen:
+            return True
+        self._seen.append(msg_id)
+        return False
 
 
 class RedisStore:
@@ -136,6 +160,14 @@ class RedisStore:
     async def set_model(self, wa_id: str, model: str) -> None:
         await self._r.set(self._model_key(wa_id), model)
 
+    async def seen(self, msg_id: str) -> bool:
+        """True if this message id was already processed (marks it as seen).
+
+        SET NX is atomic, so concurrent redeliveries can't both pass.
+        """
+        added = await self._r.set(f"seen:{msg_id}", "1", nx=True, ex=SEEN_TTL)
+        return not added
+
 
 store: MemoryStore | RedisStore = RedisStore(REDIS_URL) if REDIS_URL else MemoryStore()
 print("state backend:", type(store).__name__)
@@ -149,9 +181,43 @@ def verify_signature(body: bytes, header: str | None) -> bool:
     return hmac.compare_digest(expected, header[7:])
 
 
+# --- formatting ---------------------------------------------------------
+_MD_HEADING = re.compile(r"^#{1,6}\s*(.+)$", re.MULTILINE)
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_MD_BULLET = re.compile(r"^(\s*)-\s+", re.MULTILINE)
+
+
+def to_whatsapp(text: str) -> str:
+    """Convert common Markdown that LLMs emit into WhatsApp formatting.
+
+    WhatsApp renders *bold*, _italic_ and ```mono``` only; headings, ** and
+    tables show up as literal punctuation. The system prompt asks for WhatsApp
+    style already — this is the safety net for models that ignore it.
+    """
+    text = _MD_HEADING.sub(r"*\1*", text)
+    text = _MD_BOLD.sub(r"*\1*", text)
+    text = _MD_BULLET.sub(r"\1• ", text)
+    return text
+
+
+def split_chunks(text: str, limit: int = WA_MAX_CHARS) -> list[str]:
+    """Split long text at paragraph/word boundaries instead of mid-word."""
+    chunks: list[str] = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = text.rfind(" ", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    chunks.append(text)
+    return chunks
+
+
 # --- whatsapp send -----------------------------------------------------
 async def send_text(wa_id: str, text: str) -> None:
-    chunks = [text[i:i + WA_MAX_CHARS] for i in range(0, len(text), WA_MAX_CHARS)] or [""]
+    chunks = split_chunks(text) if text else [""]
     async with httpx.AsyncClient(timeout=30) as client:
         for chunk in chunks:
             r = await client.post(
@@ -166,6 +232,29 @@ async def send_text(wa_id: str, text: str) -> None:
             )
             if r.status_code >= 400:
                 print("WA send failed:", r.status_code, r.text)
+
+
+async def mark_read_and_typing(message_id: str) -> None:
+    """Blue ticks + 'typing…' bubble (lasts up to 25s or until we reply).
+
+    Pure UX sugar — failures are logged and ignored.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                GRAPH,
+                headers={"Authorization": f"Bearer {WA_TOKEN}"},
+                json={
+                    "messaging_product": "whatsapp",
+                    "status": "read",
+                    "message_id": message_id,
+                    "typing_indicator": {"type": "text"},
+                },
+            )
+        if r.status_code >= 400:
+            print("typing indicator failed:", r.status_code, r.text[:200])
+    except httpx.HTTPError as exc:
+        print("typing indicator failed:", exc)
 
 
 # --- whatsapp media ----------------------------------------------------
@@ -245,7 +334,7 @@ async def ask_llm(wa_id: str, prompt: str, image_data_uri: str | None = None) ->
         user_msg = {"role": "user", "content": prompt}
         hist_user_msg = user_msg
 
-    messages = hist + [user_msg]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + hist + [user_msg]
     errors: list[str] = []
 
     for model in candidate_models(current, vision):
@@ -255,13 +344,14 @@ async def ask_llm(wa_id: str, prompt: str, image_data_uri: str | None = None) ->
             print("model failed:", model, err)
             continue
 
+        # The fallback is for this turn only — the preferred model is retried
+        # on the next message, so a transient 429 never demotes the user.
         note = ""
         if model != current:
-            await store.set_model(wa_id, model)
-            note = f"ℹ️ המודל הקודם לא היה זמין — עברתי אוטומטית ל־{model}.\n\n"
+            note = f"ℹ️ {current} לא זמין כרגע — עניתי עם {model}.\n\n"
         # Persist only on success, so a failed turn doesn't poison the context.
         await store.append(wa_id, hist_user_msg, {"role": "assistant", "content": reply})
-        return note + reply
+        return note + to_whatsapp(reply)
 
     if vision and current not in VISION_MODELS:
         return "⚠️ אף מודל ראייה חינמי לא זמין כרגע. נסה שוב מאוחר יותר."
@@ -298,7 +388,10 @@ async def handle_command(wa_id: str, text: str) -> str | None:
 
 
 # --- background worker -------------------------------------------------
-async def process(wa_id: str, text: str, media_id: str | None = None) -> None:
+async def process(wa_id: str, text: str, media_id: str | None = None,
+                  message_id: str | None = None) -> None:
+    if message_id:
+        await mark_read_and_typing(message_id)
     try:
         if media_id:
             data, mime = await download_media(media_id)
@@ -334,12 +427,24 @@ async def webhook(request: Request, bg: BackgroundTasks) -> dict[str, Any]:
                 if wa_id != ALLOWED_WA_ID:
                     print("ignored message from", wa_id)
                     continue
+                msg_id = msg.get("id", "")
+                # Meta delivers at-least-once; a redelivered id must not
+                # produce a second reply.
+                if msg_id and await store.seen(msg_id):
+                    print("duplicate delivery skipped:", msg_id)
+                    continue
+                # After downtime Meta replays its backlog; don't answer stale
+                # messages the user sent hours ago.
+                ts = int(msg.get("timestamp", "0") or 0)
+                if ts and time.time() - ts > MAX_MSG_AGE:
+                    print("stale message skipped:", msg_id)
+                    continue
                 mtype = msg.get("type")
                 if mtype == "text":
-                    bg.add_task(process, wa_id, msg["text"]["body"])
+                    bg.add_task(process, wa_id, msg["text"]["body"], None, msg_id)
                 elif mtype == "image":
                     img = msg["image"]
-                    bg.add_task(process, wa_id, img.get("caption", ""), img["id"])
+                    bg.add_task(process, wa_id, img.get("caption", ""), img["id"], msg_id)
                 else:
                     bg.add_task(send_text, wa_id, "אני תומך כרגע בטקסט ובתמונות בלבד.")
 

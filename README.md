@@ -140,6 +140,25 @@ fly deploy
 > אלטרנטיבה: המאגר כולל גם `Procfile`, כך שאפשר לפרוס ב-**Render** או **Railway**
 > בלי שינויים — פשוט הגדר שם את אותם משתני הסביבה.
 
+### זיכרון שיחה מתמשך (Upstash Redis) — מומלץ בפרודקשן
+
+וואטסאפ שולח רק את ההודעה **החדשה** בכל פעם, לכן הבוט הוא זה ששומר את היסטוריית
+השיחה. בברירת מחדל הזיכרון נשמר בזיכרון התהליך (in-memory) — מה שנמחק בכל
+restart/redeploy, וגם כשמכונת Fly נכבית אוטומטית בזמן חוסר פעילות
+(`auto_stop_machines`). כדי שתוכל **להמשיך שיחה בכל זמן**, חבר Redis:
+
+1. פתח חשבון חינם ב-<https://upstash.com> → **Create Database** (Redis).
+2. העתק את ה-**`redis://` / `rediss://` URL** (כולל הסיסמה).
+3. הגדר אותו כסוד:
+   ```bash
+   fly secrets set REDIS_URL="rediss://default:<password>@<host>:<port>"
+   ```
+
+ברגע ש-`REDIS_URL` מוגדר, הבוט עובר אוטומטית ל-Redis: ההיסטוריה נשמרת תחת
+`hist:{wa_id}` עם TTL של 24 שעות, והמודל הנבחר תחת `model:{wa_id}`. אם המשתנה לא
+מוגדר — נופלים חזרה לזיכרון פנימי (מספיק לפיתוח מקומי). בהפעלה תראה בלוגים
+`state backend: RedisStore` או `MemoryStore`.
+
 ---
 
 ## 6. חיבור ה-webhook ב-Meta
@@ -198,7 +217,7 @@ fly deploy
 | `WA_APP_SECRET` | ✅ | App secret, לאימות `X-Hub-Signature-256` |
 | `ALLOWED_WA_ID` | ✅ | ה-wa_id היחיד המורשה, למשל `9725XXXXXXXX` |
 | `OPENROUTER_KEY` | ✅ | מפתח OpenRouter |
-| `REDIS_URL` | ➖ | Upstash `redis://` (אופציונלי; נופל חזרה לזיכרון) |
+| `REDIS_URL` | ➖ | Upstash `redis://` — מומלץ בפרודקשן לזיכרון שיחה מתמשך; ללא זה נופלים לזיכרון פנימי |
 
 ---
 

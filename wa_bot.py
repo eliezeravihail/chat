@@ -45,16 +45,81 @@ MODEL_ALIASES = {
     "qwen": "qwen/qwen-2.5-72b-instruct:free",
 }
 
-WA_MAX_CHARS = 4000  # actual cap is 4096; leave headroom
-HISTORY_TURNS = 12   # user+assistant messages retained
+REDIS_URL = os.environ.get("REDIS_URL")
+
+WA_MAX_CHARS = 4000       # actual cap is 4096; leave headroom
+HISTORY_TURNS = 12        # user+assistant messages retained
+HISTORY_TTL = 60 * 60 * 24  # keys expire 24h after the last message
 
 app = FastAPI()
 
-# --- state -------------------------------------------------------------
-# Swap for Upstash Redis in production: history under key f"hist:{wa_id}" (TTL 24h),
-# model under f"model:{wa_id}". In-memory is fine for a single user on one instance.
-_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_TURNS))
-_model: dict[str, str] = defaultdict(lambda: DEFAULT_MODEL)
+# --- state / persistence ----------------------------------------------
+# WhatsApp only delivers the newest message, so conversation memory must live
+# here. Two backends implement the same async interface:
+#   * RedisStore  — survives restarts / redeploys / machine sleep (Upstash).
+#   * MemoryStore — process-local; fine for local dev or a single always-on box.
+# History is kept under f"hist:{wa_id}" (list of role/content dicts, TTL 24h)
+# and the selected model under f"model:{wa_id}".
+
+
+class MemoryStore:
+    def __init__(self) -> None:
+        self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_TURNS))
+        self._model: dict[str, str] = {}
+
+    async def get_history(self, wa_id: str) -> list[dict]:
+        return list(self._history[wa_id])
+
+    async def append(self, wa_id: str, user_msg: dict, assistant_msg: dict) -> None:
+        self._history[wa_id].append(user_msg)
+        self._history[wa_id].append(assistant_msg)
+
+    async def clear(self, wa_id: str) -> None:
+        self._history[wa_id].clear()
+
+    async def get_model(self, wa_id: str) -> str:
+        return self._model.get(wa_id, DEFAULT_MODEL)
+
+    async def set_model(self, wa_id: str, model: str) -> None:
+        self._model[wa_id] = model
+
+
+class RedisStore:
+    def __init__(self, url: str) -> None:
+        import redis.asyncio as aioredis  # imported lazily so redis is optional
+
+        self._r = aioredis.from_url(url, decode_responses=True)
+
+    @staticmethod
+    def _hist_key(wa_id: str) -> str:
+        return f"hist:{wa_id}"
+
+    @staticmethod
+    def _model_key(wa_id: str) -> str:
+        return f"model:{wa_id}"
+
+    async def get_history(self, wa_id: str) -> list[dict]:
+        raw = await self._r.get(self._hist_key(wa_id))
+        return json.loads(raw) if raw else []
+
+    async def append(self, wa_id: str, user_msg: dict, assistant_msg: dict) -> None:
+        hist = await self.get_history(wa_id)
+        hist.extend([user_msg, assistant_msg])
+        hist = hist[-HISTORY_TURNS:]
+        await self._r.set(self._hist_key(wa_id), json.dumps(hist), ex=HISTORY_TTL)
+
+    async def clear(self, wa_id: str) -> None:
+        await self._r.delete(self._hist_key(wa_id))
+
+    async def get_model(self, wa_id: str) -> str:
+        return await self._r.get(self._model_key(wa_id)) or DEFAULT_MODEL
+
+    async def set_model(self, wa_id: str, model: str) -> None:
+        await self._r.set(self._model_key(wa_id), model)
+
+
+store: MemoryStore | RedisStore = RedisStore(REDIS_URL) if REDIS_URL else MemoryStore()
+print("state backend:", type(store).__name__)
 
 
 # --- signature ---------------------------------------------------------
@@ -86,8 +151,9 @@ async def send_text(wa_id: str, text: str) -> None:
 
 # --- llm ---------------------------------------------------------------
 async def ask_llm(wa_id: str, prompt: str) -> str:
-    hist = _history[wa_id]
-    messages = list(hist) + [{"role": "user", "content": prompt}]
+    hist = await store.get_history(wa_id)
+    messages = hist + [{"role": "user", "content": prompt}]
+    model = await store.get_model(wa_id)
 
     async with httpx.AsyncClient(timeout=180) as client:
         r = await client.post(
@@ -97,7 +163,7 @@ async def ask_llm(wa_id: str, prompt: str) -> str:
                 "HTTP-Referer": "https://localhost",
                 "X-Title": "wa-bridge",
             },
-            json={"model": _model[wa_id], "messages": messages},
+            json={"model": model, "messages": messages},
         )
     if r.status_code >= 400:
         return f"⚠️ שגיאת מודל ({r.status_code}): {r.text[:300]}"
@@ -108,37 +174,44 @@ async def ask_llm(wa_id: str, prompt: str) -> str:
     except (KeyError, IndexError):
         return f"⚠️ תשובה לא צפויה: {json.dumps(data)[:300]}"
 
-    hist.append({"role": "user", "content": prompt})
-    hist.append({"role": "assistant", "content": reply})
+    # Persist only on success, so a failed turn doesn't poison the context.
+    await store.append(
+        wa_id,
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": reply},
+    )
     return reply
 
 
 # --- commands ----------------------------------------------------------
-def handle_command(wa_id: str, text: str) -> str | None:
+async def handle_command(wa_id: str, text: str) -> str | None:
     if not text.startswith("/"):
         return None
     cmd, _, arg = text[1:].partition(" ")
     cmd, arg = cmd.lower(), arg.strip()
 
     if cmd == "clear":
-        _history[wa_id].clear()
+        await store.clear(wa_id)
         return "🧹 ההקשר נוקה."
     if cmd == "models":
+        current = await store.get_model(wa_id)
         lines = [f"• {k} → {v}" for k, v in MODEL_ALIASES.items()]
-        return "מודלים זמינים:\n" + "\n".join(lines) + f"\n\nנוכחי: {_model[wa_id]}"
+        return "מודלים זמינים:\n" + "\n".join(lines) + f"\n\nנוכחי: {current}"
     if cmd == "model":
         if not arg:
-            return f"מודל נוכחי: {_model[wa_id]}"
-        _model[wa_id] = MODEL_ALIASES.get(arg, arg)
-        _history[wa_id].clear()
-        return f"✅ הוחלף ל־{_model[wa_id]} (ההקשר אופס)."
+            current = await store.get_model(wa_id)
+            return f"מודל נוכחי: {current}"
+        model = MODEL_ALIASES.get(arg, arg)
+        await store.set_model(wa_id, model)
+        await store.clear(wa_id)
+        return f"✅ הוחלף ל־{model} (ההקשר אופס)."
     return "פקודה לא מוכרת. נסה /models, /model <שם>, /clear"
 
 
 # --- background worker -------------------------------------------------
 async def process(wa_id: str, text: str) -> None:
     try:
-        reply = handle_command(wa_id, text) or await ask_llm(wa_id, text)
+        reply = await handle_command(wa_id, text) or await ask_llm(wa_id, text)
     except Exception as exc:  # noqa: BLE001
         reply = f"⚠️ שגיאה: {exc!r}"
     await send_text(wa_id, reply)

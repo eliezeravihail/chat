@@ -38,8 +38,8 @@ OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 GRAPH = f"https://graph.facebook.com/v21.0/{WA_PHONE_ID}/messages"
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 
-# The client gets an advanced model by default; free models are fallback only.
-DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
+# Start on a free model; switch to a premium one any time with /model claude.
+DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324:free"
 MODEL_ALIASES = {
     "claude": "anthropic/claude-sonnet-4.5",
     "gpt": "openai/gpt-4o",

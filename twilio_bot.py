@@ -46,7 +46,8 @@ def _norm(addr: str) -> str:
     return addr.replace("whatsapp:", "").replace("+", "").strip()
 
 
-ALLOWED_WA_ID = _norm(os.environ["ALLOWED_WA_ID"])
+# One or more allowed numbers (comma-separated). The bot ignores everyone else.
+ALLOWED = {_norm(a) for a in os.environ["ALLOWED_WA_ID"].split(",") if a.strip()}
 
 TWILIO_MESSAGES = (
     f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
@@ -125,7 +126,7 @@ async def webhook(request: Request, bg: BackgroundTasks) -> dict[str, str]:
         raise HTTPException(403, "bad signature")
 
     sender = _norm(params.get("From", ""))
-    if sender != ALLOWED_WA_ID:
+    if sender not in ALLOWED:
         print("ignored message from", sender)
         return {"status": "ignored"}
 

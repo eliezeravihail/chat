@@ -15,6 +15,7 @@ Run:  uvicorn wa_bot:app --host 0.0.0.0 --port 8080
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -44,6 +45,24 @@ MODEL_ALIASES = {
     "llama": "meta-llama/llama-3.3-70b-instruct:free",
     "qwen": "qwen/qwen-2.5-72b-instruct:free",
 }
+
+# Free models tried in order when the active one is unavailable (rate-limited,
+# out of quota, deprecated, or provider error). A model that no longer exists
+# simply errors and the loop moves on, so the chain is self-healing.
+TEXT_FALLBACKS = [
+    "deepseek/deepseek-chat-v3-0324:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "google/gemini-2.0-flash-exp:free",
+]
+# Vision-capable free models (accept image input). Used when a message
+# contains an image; ordered by reliability.
+VISION_FALLBACKS = [
+    "google/gemini-2.0-flash-exp:free",
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
+    "qwen/qwen-2.5-vl-72b-instruct:free",
+]
+VISION_MODELS = set(VISION_FALLBACKS)
 
 REDIS_URL = os.environ.get("REDIS_URL")
 
@@ -149,38 +168,104 @@ async def send_text(wa_id: str, text: str) -> None:
                 print("WA send failed:", r.status_code, r.text)
 
 
-# --- llm ---------------------------------------------------------------
-async def ask_llm(wa_id: str, prompt: str) -> str:
-    hist = await store.get_history(wa_id)
-    messages = hist + [{"role": "user", "content": prompt}]
-    model = await store.get_model(wa_id)
+# --- whatsapp media ----------------------------------------------------
+async def download_media(media_id: str) -> tuple[bytes, str]:
+    """Fetch a WhatsApp media object; returns (bytes, mime_type).
 
-    async with httpx.AsyncClient(timeout=180) as client:
-        r = await client.post(
-            OPENROUTER,
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_KEY}",
-                "HTTP-Referer": "https://localhost",
-                "X-Title": "wa-bridge",
-            },
-            json={"model": model, "messages": messages},
+    Two steps: resolve the media id to a short-lived URL, then download it.
+    Both calls require the WA_TOKEN bearer.
+    """
+    async with httpx.AsyncClient(timeout=60) as client:
+        meta = await client.get(
+            f"https://graph.facebook.com/v21.0/{media_id}",
+            headers={"Authorization": f"Bearer {WA_TOKEN}"},
         )
-    if r.status_code >= 400:
-        return f"⚠️ שגיאת מודל ({r.status_code}): {r.text[:300]}"
+        meta.raise_for_status()
+        info = meta.json()
+        mime = info.get("mime_type", "image/jpeg").split(";")[0]
+        media = await client.get(
+            info["url"], headers={"Authorization": f"Bearer {WA_TOKEN}"}
+        )
+        media.raise_for_status()
+        return media.content, mime
 
-    data = r.json()
+
+# --- llm ---------------------------------------------------------------
+def candidate_models(current: str, vision: bool) -> list[str]:
+    """Ordered list of models to try: the user's choice first (if it fits the
+    modality), then the free fallbacks, de-duplicated."""
+    base = VISION_FALLBACKS if vision else TEXT_FALLBACKS
+    ordered: list[str] = []
+    if not vision or current in VISION_MODELS:
+        ordered.append(current)
+    for m in base:
+        if m not in ordered:
+            ordered.append(m)
+    return ordered
+
+
+async def _call_openrouter(model: str, messages: list[dict]) -> tuple[str | None, str]:
+    """Single OpenRouter call. Returns (reply, error); reply is None on failure."""
     try:
-        reply = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError):
-        return f"⚠️ תשובה לא צפויה: {json.dumps(data)[:300]}"
+        async with httpx.AsyncClient(timeout=180) as client:
+            r = await client.post(
+                OPENROUTER,
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_KEY}",
+                    "HTTP-Referer": "https://localhost",
+                    "X-Title": "wa-bridge",
+                },
+                json={"model": model, "messages": messages},
+            )
+    except httpx.HTTPError as exc:
+        return None, f"network {exc!r}"
+    if r.status_code >= 400:
+        return None, f"{r.status_code} {r.text[:200]}"
+    try:
+        return r.json()["choices"][0]["message"]["content"], ""
+    except (KeyError, IndexError, ValueError):
+        # OpenRouter sometimes returns an error object with HTTP 200.
+        return None, r.text[:200]
+async def ask_llm(wa_id: str, prompt: str, image_data_uri: str | None = None) -> str:
+    hist = await store.get_history(wa_id)
+    current = await store.get_model(wa_id)
+    vision = image_data_uri is not None
 
-    # Persist only on success, so a failed turn doesn't poison the context.
-    await store.append(
-        wa_id,
-        {"role": "user", "content": prompt},
-        {"role": "assistant", "content": reply},
-    )
-    return reply
+    # Build the outgoing user message (text, or text + image for vision turns).
+    if vision:
+        content: list[dict] = []
+        if prompt:
+            content.append({"type": "text", "text": prompt})
+        content.append({"type": "image_url", "image_url": {"url": image_data_uri}})
+        user_msg: dict = {"role": "user", "content": content}
+        # Don't store the base64 blob in history — keep a light text marker so
+        # follow-up turns stay small and the image isn't re-sent every time.
+        hist_user_msg = {"role": "user", "content": (prompt + " " if prompt else "") + "[תמונה]"}
+    else:
+        user_msg = {"role": "user", "content": prompt}
+        hist_user_msg = user_msg
+
+    messages = hist + [user_msg]
+    errors: list[str] = []
+
+    for model in candidate_models(current, vision):
+        reply, err = await _call_openrouter(model, messages)
+        if reply is None:
+            errors.append(f"{model} → {err}")
+            print("model failed:", model, err)
+            continue
+
+        note = ""
+        if model != current:
+            await store.set_model(wa_id, model)
+            note = f"ℹ️ המודל הקודם לא היה זמין — עברתי אוטומטית ל־{model}.\n\n"
+        # Persist only on success, so a failed turn doesn't poison the context.
+        await store.append(wa_id, hist_user_msg, {"role": "assistant", "content": reply})
+        return note + reply
+
+    if vision and current not in VISION_MODELS:
+        return "⚠️ אף מודל ראייה חינמי לא זמין כרגע. נסה שוב מאוחר יותר."
+    return "⚠️ כל המודלים הזמינים נכשלו כרגע:\n" + "\n".join(errors[:4])
 
 
 # --- commands ----------------------------------------------------------
@@ -196,7 +281,11 @@ async def handle_command(wa_id: str, text: str) -> str | None:
     if cmd == "models":
         current = await store.get_model(wa_id)
         lines = [f"• {k} → {v}" for k, v in MODEL_ALIASES.items()]
-        return "מודלים זמינים:\n" + "\n".join(lines) + f"\n\nנוכחי: {current}"
+        note = (
+            "\n\n📷 שליחת תמונה עוברת אוטומטית למודל ראייה. "
+            "אם המודל הנוכחי לא זמין, אעבור אוטומטית למודל אחר ואעדכן אותך."
+        )
+        return "מודלים זמינים:\n" + "\n".join(lines) + f"\n\nנוכחי: {current}" + note
     if cmd == "model":
         if not arg:
             current = await store.get_model(wa_id)
@@ -209,9 +298,14 @@ async def handle_command(wa_id: str, text: str) -> str | None:
 
 
 # --- background worker -------------------------------------------------
-async def process(wa_id: str, text: str) -> None:
+async def process(wa_id: str, text: str, media_id: str | None = None) -> None:
     try:
-        reply = await handle_command(wa_id, text) or await ask_llm(wa_id, text)
+        if media_id:
+            data, mime = await download_media(media_id)
+            data_uri = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+            reply = await ask_llm(wa_id, text or "מה רואים בתמונה?", image_data_uri=data_uri)
+        else:
+            reply = await handle_command(wa_id, text) or await ask_llm(wa_id, text)
     except Exception as exc:  # noqa: BLE001
         reply = f"⚠️ שגיאה: {exc!r}"
     await send_text(wa_id, reply)
@@ -240,10 +334,14 @@ async def webhook(request: Request, bg: BackgroundTasks) -> dict[str, Any]:
                 if wa_id != ALLOWED_WA_ID:
                     print("ignored message from", wa_id)
                     continue
-                if msg.get("type") != "text":
-                    bg.add_task(send_text, wa_id, "אני תומך כרגע רק בטקסט.")
-                    continue
-                bg.add_task(process, wa_id, msg["text"]["body"])
+                mtype = msg.get("type")
+                if mtype == "text":
+                    bg.add_task(process, wa_id, msg["text"]["body"])
+                elif mtype == "image":
+                    img = msg["image"]
+                    bg.add_task(process, wa_id, img.get("caption", ""), img["id"])
+                else:
+                    bg.add_task(send_text, wa_id, "אני תומך כרגע בטקסט ובתמונות בלבד.")
 
     # Always 200 fast — Meta retries on timeout, which would duplicate replies.
     return {"status": "ok"}

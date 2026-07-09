@@ -42,25 +42,36 @@ PUBLIC_URL=...                           # ממולא בשלב הרלוונטי 
 
 לבדיקה מהירה. צריך **Python 3.11+** ו-[ngrok](https://ngrok.com) (חינם).
 
+**התקנה** (פעם אחת):
+
 ```bash
 git clone https://github.com/eliezeravihail/chat.git
 cd chat
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env        # מלא את השדות שלמעלה (בינתיים בלי PUBLIC_URL)
+python -m venv .venv
 ```
 
-הרץ **שני טרמינלים**:
+הפעל את ה-venv — **לפי מערכת ההפעלה:**
+- **Windows (cmd):** `.venv\Scripts\activate`
+- **macOS / Linux:** `source .venv/bin/activate`
+
+ואז:
+```bash
+pip install -r requirements.txt
+copy .env.example .env       # Windows.  ב-mac/linux: cp .env.example .env
+```
+מלא את השדות ב-`.env` (בינתיים בלי `PUBLIC_URL`). הבוט טוען את `.env` **לבד** —
+אין צורך ב-`source`.
+
+**הרצה** — שני טרמינלים (בשניהם הפעל קודם את ה-venv):
 ```bash
 # טרמינל 1 — הבוט
-set -a; source .env; set +a
-uvicorn twilio_bot:app --host 0.0.0.0 --port 8080
+python -m uvicorn twilio_bot:app --host 0.0.0.0 --port 8080
 
 # טרמינל 2 — מנהרה ציבורית
-ngrok http 8080            # העתק את כתובת ה-https שמופיעה
+ngrok http 8080              # העתק את כתובת ה-https שמופיעה
 ```
 
-1. עדכן ב-`.env`: `PUBLIC_URL=https://xxxx.ngrok-free.app` והפעל מחדש את טרמינל 1.
+1. עדכן ב-`.env`: `PUBLIC_URL=https://xxxx.ngrok-free.app`, וסגור+הפעל מחדש את טרמינל 1.
 2. ב-**Twilio Console → Sandbox settings → "When a message comes in"** הדבק:
    `https://xxxx.ngrok-free.app/webhook` (method **POST**).
 3. שלח הודעה מה-WhatsApp שלך למספר ה-sandbox → תקבל תשובה. 🎉

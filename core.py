@@ -20,6 +20,16 @@ from collections import defaultdict, deque
 
 import httpx
 
+# Load a local .env automatically, so no `source .env` is needed (works the
+# same on Windows/macOS/Linux). Every entrypoint imports core first, so this
+# runs before any adapter reads its own env vars.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ModuleNotFoundError:
+    pass
+
 OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 REDIS_URL = os.environ.get("REDIS_URL")

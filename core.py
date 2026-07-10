@@ -253,6 +253,13 @@ def split_chunks(text: str, limit: int = WA_MAX_CHARS) -> list[str]:
 
 
 # --- llm ---------------------------------------------------------------
+MAX_TRIES = 4  # models to try per message, so one bad round stays fast
+
+# Remembers the last free model that actually worked, per user (in-memory).
+# On 'auto' we try it first, so we don't re-scan the whole pool every message.
+_last_good: dict[str, str] = {}
+
+
 async def candidate_models(current: str, vision: bool) -> list[str]:
     """Ordered models to try: the user's explicit choice first (if any), then
     the live free pool. On 'auto' it's just the free pool. A model that can't
@@ -307,18 +314,25 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
         hist_user_msg = user_msg
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + hist + [user_msg]
-    errors: list[str] = []
 
-    for model in await candidate_models(current, vision):
+    cands = await candidate_models(current, vision)
+    # On 'auto', try the model that worked last time first — so a good pick is
+    # reused instead of re-scanning the whole pool on every message.
+    if current == "auto" and _last_good.get(uid) in cands:
+        lg = _last_good[uid]
+        cands = [lg] + [m for m in cands if m != lg]
+    cands = cands[:MAX_TRIES]
+
+    for model in cands:
         reply, err = await _call_openrouter(model, messages)
         if reply is None:
-            errors.append(f"{model} → {err}")
-            print("model failed:", model, err)
+            print("model failed:", model, err[:100])
             continue
 
-        # The fallback is for this turn only — the preferred model is retried
-        # on the next message, so a transient 429 never demotes the user. On
-        # 'auto' any free model is expected, so don't nag about the switch.
+        if current == "auto":
+            _last_good[uid] = model
+        # On an explicit choice, note a per-turn fallback; on 'auto' any free
+        # model is expected, so stay quiet.
         note = ""
         if current != "auto" and model != current:
             note = f"ℹ️ {current} לא זמין כרגע — עניתי עם {model}.\n\n"
@@ -327,11 +341,11 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
         return note + to_whatsapp(reply)
 
     if vision:
-        return "⚠️ אף מודל ראייה חינמי לא זמין כרגע. נסה שוב מאוחר יותר, או /model claude."
+        return "⚠️ אף מודל ראייה חינמי זמין כרגע. נסה שוב מאוחר יותר, או /model claude."
     return (
-        "⚠️ כל המודלים החינמיים נכשלו כרגע (ייתכן שהם עמוסים).\n"
-        "נסה שוב בעוד רגע, או עבור למודל בתשלום עם /model claude (דורש קרדיט ב-OpenRouter).\n\n"
-        + "\n".join(errors[:3])
+        "⚠️ המודלים החינמיים עמוסים כרגע (rate limit).\n"
+        "אפשרויות: נסה שוב בעוד רגע · /model deepseek (זול מאוד) · "
+        "או הוסף קצת קרדיט ב-OpenRouter כדי להעלות את המגבלה של המודלים החינמיים."
     )
 
 

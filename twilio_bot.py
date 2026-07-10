@@ -42,8 +42,8 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 
 
 def _norm(addr: str) -> str:
-    """Normalize a WhatsApp address to bare digits (drop 'whatsapp:' and '+')."""
-    return addr.replace("whatsapp:", "").replace("+", "").strip()
+    """Normalize a WhatsApp address to bare digits (drop everything non-digit)."""
+    return "".join(ch for ch in addr if ch.isdigit())
 
 
 # One or more allowed numbers (comma-separated). The bot ignores everyone else.

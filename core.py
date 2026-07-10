@@ -32,39 +32,92 @@ except ModuleNotFoundError:
 
 OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
 REDIS_URL = os.environ.get("REDIS_URL")
 
-# Start on a free model; switch to a premium one any time with /model claude.
-DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324:free"
+# "auto" = use whatever free models are currently available (discovered live
+# from OpenRouter). Switch to a premium model any time with /model claude.
+DEFAULT_MODEL = "auto"
 MODEL_ALIASES = {
-    "claude": "anthropic/claude-sonnet-4.5",
-    "gpt": "openai/gpt-4o",
-    "gemini": "google/gemini-2.0-flash-exp:free",
-    "deepseek": "deepseek/deepseek-chat-v3-0324:free",
-    "llama": "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen": "qwen/qwen-2.5-72b-instruct:free",
+    "auto": "auto",                                 # best available free model
+    "free": "auto",
+    "deepseek": "deepseek/deepseek-chat-v3-0324",   # cheap paid (~cents/month)
+    "mini": "openai/gpt-4o-mini",                   # cheap paid
+    "gpt": "openai/gpt-4o",                         # premium
+    "claude": "anthropic/claude-sonnet-4.5",        # premium
 }
 
-# Models tried in order when the preferred one is unavailable (rate-limited,
-# out of quota, deprecated, or provider error). The switch is per-turn only:
-# the user's preferred model is retried on every new message. A model that no
-# longer exists simply errors and the loop moves on, so the chain self-heals.
+# Preferred families, in order, when ranking the discovered free models.
+_MODEL_PREF = ["deepseek", "llama", "qwen", "mistral", "gemini", "gemma", "glm", "phi"]
+
+# Last-resort static lists, used only if the live model list can't be fetched.
 TEXT_FALLBACKS = [
     "deepseek/deepseek-chat-v3-0324:free",
     "meta-llama/llama-3.3-70b-instruct:free",
     "qwen/qwen-2.5-72b-instruct:free",
-    "google/gemini-2.0-flash-exp:free",
 ]
-# Models that accept image input, used for picture messages.
 VISION_FALLBACKS = [
-    "google/gemini-2.0-flash-exp:free",
     "meta-llama/llama-3.2-11b-vision-instruct:free",
     "qwen/qwen-2.5-vl-72b-instruct:free",
 ]
-VISION_MODELS = set(VISION_FALLBACKS) | {
-    "anthropic/claude-sonnet-4.5",
-    "openai/gpt-4o",
-}
+
+_free_cache: dict | None = None
+
+
+async def free_models() -> dict:
+    """Discover currently-free models from OpenRouter (cached for the process).
+
+    Free model slugs rot over time, so instead of hardcoding them we read the
+    live list and keep the ones priced at 0. Falls back to the static lists if
+    the fetch fails.
+    """
+    global _free_cache
+    if _free_cache is not None:
+        return _free_cache
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                OPENROUTER_MODELS, headers={"Authorization": f"Bearer {OPENROUTER_KEY}"}
+            )
+            r.raise_for_status()
+            data = r.json().get("data", [])
+    except Exception as exc:  # noqa: BLE001
+        print("free-model discovery failed, using static list:", exc)
+        _free_cache = {"text": list(TEXT_FALLBACKS), "vision": list(VISION_FALLBACKS)}
+        return _free_cache
+
+    def is_free(m: dict) -> bool:
+        p = m.get("pricing", {})
+        try:
+            return float(p.get("prompt", 1)) == 0 and float(p.get("completion", 1)) == 0
+        except (TypeError, ValueError):
+            return False
+
+    def rank(mid: str) -> int:
+        low = mid.lower()
+        for i, fam in enumerate(_MODEL_PREF):
+            if fam in low:
+                return i
+        return len(_MODEL_PREF)
+
+    text, vision = [], []
+    for m in data:
+        if not is_free(m):
+            continue
+        mid = m.get("id")
+        if not mid:
+            continue
+        text.append(mid)
+        if "image" in (m.get("architecture", {}).get("input_modalities") or []):
+            vision.append(mid)
+    text.sort(key=rank)
+    vision.sort(key=rank)
+    _free_cache = {
+        "text": text or list(TEXT_FALLBACKS),
+        "vision": vision or list(VISION_FALLBACKS),
+    }
+    print(f"discovered {len(text)} free text models, {len(vision)} free vision models")
+    return _free_cache
 
 SYSTEM_PROMPT = (
     "אתה עוזר אישי שמשוחח בוואטסאפ. ענה בשפה שבה המשתמש כותב (ברירת מחדל: עברית), "
@@ -200,17 +253,14 @@ def split_chunks(text: str, limit: int = WA_MAX_CHARS) -> list[str]:
 
 
 # --- llm ---------------------------------------------------------------
-def candidate_models(current: str, vision: bool) -> list[str]:
-    """Ordered list of models to try: the user's choice first (if it fits the
-    modality), then the fallbacks, de-duplicated."""
-    base = VISION_FALLBACKS if vision else TEXT_FALLBACKS
-    ordered: list[str] = []
-    if not vision or current in VISION_MODELS:
-        ordered.append(current)
-    for m in base:
-        if m not in ordered:
-            ordered.append(m)
-    return ordered
+async def candidate_models(current: str, vision: bool) -> list[str]:
+    """Ordered models to try: the user's explicit choice first (if any), then
+    the live free pool. On 'auto' it's just the free pool. A model that can't
+    handle the request simply errors and the loop moves on."""
+    pool = (await free_models())["vision" if vision else "text"]
+    if current == "auto":
+        return list(pool)
+    return [current] + [m for m in pool if m != current]
 
 
 async def _call_openrouter(model: str, messages: list[dict]) -> tuple[str | None, str]:
@@ -259,7 +309,7 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + hist + [user_msg]
     errors: list[str] = []
 
-    for model in candidate_models(current, vision):
+    for model in await candidate_models(current, vision):
         reply, err = await _call_openrouter(model, messages)
         if reply is None:
             errors.append(f"{model} → {err}")
@@ -267,17 +317,22 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
             continue
 
         # The fallback is for this turn only — the preferred model is retried
-        # on the next message, so a transient 429 never demotes the user.
+        # on the next message, so a transient 429 never demotes the user. On
+        # 'auto' any free model is expected, so don't nag about the switch.
         note = ""
-        if model != current:
+        if current != "auto" and model != current:
             note = f"ℹ️ {current} לא זמין כרגע — עניתי עם {model}.\n\n"
         # Persist only on success, so a failed turn doesn't poison the context.
         await store.append(uid, hist_user_msg, {"role": "assistant", "content": reply})
         return note + to_whatsapp(reply)
 
-    if vision and current not in VISION_MODELS:
-        return "⚠️ אף מודל ראייה חינמי לא זמין כרגע. נסה שוב מאוחר יותר."
-    return "⚠️ כל המודלים הזמינים נכשלו כרגע:\n" + "\n".join(errors[:4])
+    if vision:
+        return "⚠️ אף מודל ראייה חינמי לא זמין כרגע. נסה שוב מאוחר יותר, או /model claude."
+    return (
+        "⚠️ כל המודלים החינמיים נכשלו כרגע (ייתכן שהם עמוסים).\n"
+        "נסה שוב בעוד רגע, או עבור למודל בתשלום עם /model claude (דורש קרדיט ב-OpenRouter).\n\n"
+        + "\n".join(errors[:3])
+    )
 
 
 # --- commands ----------------------------------------------------------
@@ -292,12 +347,16 @@ async def handle_command(uid: str, text: str) -> str | None:
         return "🧹 ההקשר נוקה."
     if cmd == "models":
         current = await store.get_model(uid)
-        lines = [f"• {k} → {v}" for k, v in MODEL_ALIASES.items()]
-        note = (
-            "\n\n📷 שליחת תמונה עוברת אוטומטית למודל ראייה. "
-            "אם המודל הנוכחי לא זמין, אעבור אוטומטית למודל אחר ואעדכן אותך."
+        aliases = ", ".join(MODEL_ALIASES)
+        free = (await free_models())["text"][:8]
+        free_list = "\n".join(f"• {m}" for m in free) or "(לא נמצאו כרגע)"
+        return (
+            f"מודל נוכחי: {current}\n\n"
+            f"קיצורים: {aliases}\n"
+            "(`/model auto` = הכי טוב חינמי, `/model claude` = בתשלום)\n\n"
+            "מודלים חינמיים זמינים כרגע:\n" + free_list +
+            "\n\n📷 שליחת תמונה עוברת אוטומטית למודל ראייה חינמי."
         )
-        return "מודלים זמינים:\n" + "\n".join(lines) + f"\n\nנוכחי: {current}" + note
     if cmd == "model":
         if not arg:
             current = await store.get_model(uid)

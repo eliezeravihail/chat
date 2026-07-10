@@ -128,6 +128,7 @@ SYSTEM_PROMPT = (
     "פסקאות קצרות; רשימות עם • או מספרים. אמוג'י במידה וכשזה מוסיף."
 )
 
+SHOW_MODEL = os.environ.get("SHOW_MODEL", "1") != "0"  # append which model replied
 WA_MAX_CHARS = 4000            # WhatsApp caps a message at 4096; leave headroom
 HISTORY_TURNS = 40             # user+assistant messages retained
 HISTORY_TTL = 60 * 60 * 24 * 30  # conversation kept 30 days after last message
@@ -339,7 +340,8 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
             note = f"ℹ️ {current} לא זמין כרגע — עניתי עם {model}.\n\n"
         # Persist only on success, so a failed turn doesn't poison the context.
         await store.append(uid, hist_user_msg, {"role": "assistant", "content": reply})
-        return note + to_whatsapp(reply)
+        tag = f"\n\n_— {model}_" if SHOW_MODEL else ""
+        return note + to_whatsapp(reply) + tag
 
     if vision:
         return "⚠️ אף מודל ראייה חינמי זמין כרגע. נסה שוב מאוחר יותר, או /model claude."

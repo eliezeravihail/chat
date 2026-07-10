@@ -35,18 +35,21 @@ OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
 REDIS_URL = os.environ.get("REDIS_URL")
 
-# "auto" = use whatever free models are currently available (discovered live
-# from OpenRouter). Switch to a premium model any time with /model claude.
-DEFAULT_MODEL = "auto"
 MODEL_ALIASES = {
     "auto": "auto",                                 # best available free model
     "free": "auto",
+    "hy3": "tencent/hy3",                           # Tencent Hunyuan Hy3 (default)
     "deepseek": "deepseek/deepseek-chat-v3-0324",   # cheap paid (~cents/month)
     "mini": "openai/gpt-4o-mini",                   # cheap paid
-    "hy3": "tencent/hy3",                           # Tencent Hunyuan Hy3
     "gpt": "openai/gpt-4o",                         # premium
     "claude": "anthropic/claude-sonnet-4.5",        # premium
 }
+
+# Default: ALWAYS try HY3 first; if it fails (e.g. out of credit / 402) the
+# free models are tried automatically as fallback. Override via DEFAULT_MODEL
+# env (a slug or an alias, or "auto" for free-only).
+_default_raw = os.environ.get("DEFAULT_MODEL", "hy3")
+DEFAULT_MODEL = MODEL_ALIASES.get(_default_raw.lower(), _default_raw)
 
 # Preferred families, in order, when ranking the discovered free models.
 _MODEL_PREF = ["deepseek", "llama", "qwen", "mistral", "gemini", "gemma", "glm", "phi"]
@@ -333,11 +336,11 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
 
         if current == "auto":
             _last_good[uid] = model
-        # On an explicit choice, note a per-turn fallback; on 'auto' any free
-        # model is expected, so stay quiet.
+        # On an explicit choice, note a per-turn fallback to a free model; on
+        # 'auto' any free model is expected, so stay quiet.
         note = ""
         if current != "auto" and model != current:
-            note = f"ℹ️ {current} לא זמין כרגע — עניתי עם {model}.\n\n"
+            note = f"ℹ️ {current} לא זמין (אולי נגמר הקרדיט) — עניתי עם מודל חינמי 🆓 {model}.\n\n"
         # Persist only on success, so a failed turn doesn't poison the context.
         await store.append(uid, hist_user_msg, {"role": "assistant", "content": reply})
         tag = f"\n\n_— {model}_" if SHOW_MODEL else ""

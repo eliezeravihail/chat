@@ -43,6 +43,7 @@ MODEL_ALIASES = {
     "free": "auto",
     "deepseek": "deepseek/deepseek-chat-v3-0324",   # cheap paid (~cents/month)
     "mini": "openai/gpt-4o-mini",                   # cheap paid
+    "hy3": "tencent/hy3",                           # Tencent Hunyuan Hy3
     "gpt": "openai/gpt-4o",                         # premium
     "claude": "anthropic/claude-sonnet-4.5",        # premium
 }

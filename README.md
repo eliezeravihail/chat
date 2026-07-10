@@ -91,6 +91,32 @@ tmux new -s bot
 
 ---
 
+## דרך 3 — Fly.io עם עדכון אוטומטי מ-GitHub (push → מתעדכן לבד)
+
+רוצה שהבוט ירוץ בענן **וגם יתעדכן אוטומטית** בכל שינוי קוד, בלי לגעת בשרת? הבוט
+מתארח ב-Fly (worker קבוע, בלי webhook), ו-GitHub Action פורס אותו בכל push ל-`main`.
+
+**הקמה חד-פעמית:**
+```bash
+curl -L https://fly.io/install.sh | sh
+fly auth login
+fly launch --no-deploy                 # בחר שם אפליקציה; עדכן app ב-fly.toml
+fly secrets set \
+  OPENROUTER_KEY=... TWILIO_ACCOUNT_SID=... TWILIO_AUTH_TOKEN=... \
+  TWILIO_FROM="whatsapp:+14155238886" ALLOWED_WA_ID="whatsapp:+9725XXXXXXXX"
+fly deploy                             # פריסה ראשונה
+
+fly tokens create deploy               # העתק את הטוקן
+```
+ואז ב-**GitHub → Settings → Secrets and variables → Actions → New repository secret**:
+שם `FLY_API_TOKEN`, ערך = הטוקן.
+
+מעכשיו — **כל push ל-`main` פורס אוטומטית** את הקוד העדכני (הזרימה מוגדרת ב-
+`.github/workflows/fly-deploy.yml`). זה בדיוק "להריץ קוד עדכני בקלות", במקום
+לגיטימי — לא לולאה ב-Actions (שאסורה ומוגבלת ל-6 שעות), אלא פריסה ל-worker קבוע.
+
+---
+
 ## פקודות (בתוך הצ'אט)
 
 | פקודה | פעולה |

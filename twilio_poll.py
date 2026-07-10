@@ -35,7 +35,8 @@ TWILIO_FROM = os.environ["TWILIO_FROM"]
 
 
 def _norm(addr: str) -> str:
-    return addr.replace("whatsapp:", "").replace("+", "").strip()
+    # keep digits only, so dashes/spaces/() in a pasted number don't break matching
+    return "".join(ch for ch in addr if ch.isdigit())
 
 
 # One or more allowed numbers (comma-separated). The bot ignores everyone else.

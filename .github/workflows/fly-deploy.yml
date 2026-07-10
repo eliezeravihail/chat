@@ -1,0 +1,27 @@
+name: deploy
+
+# Auto-deploy the bot to Fly.io on every push to main, so the latest code
+# runs in the cloud without a manual redeploy. One-time setup:
+#   1. fly launch --no-deploy          (creates the app; commit the fly.toml)
+#   2. fly secrets set OPENROUTER_KEY=... TWILIO_ACCOUNT_SID=... TWILIO_AUTH_TOKEN=... \
+#                      TWILIO_FROM=... ALLOWED_WA_ID=...
+#   3. fly tokens create deploy        (copy the token)
+#   4. GitHub repo → Settings → Secrets and variables → Actions → New secret:
+#         name  FLY_API_TOKEN   value  <the token>
+# After that, every push to main redeploys automatically.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency: deploy-group
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

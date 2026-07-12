@@ -69,7 +69,6 @@ fallback_providers:
     model: qwen/qwen3-next-80b-a3b-instruct:free
 platform_toolsets:
   whatsapp: []
-  ntfy: []
   cli: []
 toolsets: []
 EOF

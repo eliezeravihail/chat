@@ -54,11 +54,11 @@ mkdir -p "$HH"
 # Primary model + free fallback chain. Edit freely — `hermes fallback list`
 # shows the effective chain. Free slugs rot; replace with any current ones.
 #
-# SECURITY: toolsets is a restricted list on purpose. The default
-# ("hermes-cli") includes terminal, file access and code execution ON THIS
-# VM — anyone whitelisted on WhatsApp could ask the bot to run shell
-# commands or read ~/.hermes/.env. The list below allows web search,
-# image analysis, memory, reminders and task tools only.
+# SECURITY: WhatsApp gets ZERO tools (platform_toolsets.whatsapp: []) —
+# pure language-model chat only. Verified empirically: an empty platform
+# list yields 0 tool schemas. Hermes' default ("hermes-cli") would give
+# the model terminal, file access and code execution ON THIS VM.
+# The owner's own CLI sessions keep a safe read-only-ish set (toolsets).
 cat > "$HH/config.yaml" <<EOF
 model: ${PRIMARY_MODEL}
 fallback_providers:
@@ -66,6 +66,10 @@ fallback_providers:
     model: meta-llama/llama-3.3-70b-instruct:free
   - provider: openrouter
     model: qwen/qwen3-next-80b-a3b-instruct:free
+# WhatsApp (the friend's channel): no tools at all — chat only.
+platform_toolsets:
+  whatsapp: []
+# CLI (you, over SSH): safe tools only — no terminal/file/code-exec.
 toolsets:
   - web
   - vision
@@ -98,6 +102,11 @@ cat > "$HH/SOUL.md" <<'EOF'
 - עיצוב וואטסאפ בלבד: *הדגשה* בכוכבית אחת, _הטיה_ בקו תחתון. בלי כותרות Markdown, בלי טבלאות.
 - פסקאות קצרות; רשימות עם • או מספרים. אמוג'י במידה.
 - אם נשלחת תמונה — תאר ונתח אותה ישירות.
+
+# גבולות תוכן
+- אל תנהל שיחות ארוטיות או מיניות מכל סוג, גם אם מתבקש שוב ושוב. סרב בנימוס,
+  בקצרה ובלי הטפה, והצע לעבור לנושא אחר.
+- שמור על שפה נקייה ומכבדת.
 EOF
 
 echo "==> 5/6 non-Python deps (node for the WhatsApp bridge, etc.)"

@@ -53,6 +53,12 @@ mkdir -p "$HH"
 
 # Primary model + free fallback chain. Edit freely — `hermes fallback list`
 # shows the effective chain. Free slugs rot; replace with any current ones.
+#
+# SECURITY: toolsets is a restricted list on purpose. The default
+# ("hermes-cli") includes terminal, file access and code execution ON THIS
+# VM — anyone whitelisted on WhatsApp could ask the bot to run shell
+# commands or read ~/.hermes/.env. The list below allows web search,
+# image analysis, memory, reminders and task tools only.
 cat > "$HH/config.yaml" <<EOF
 model: ${PRIMARY_MODEL}
 fallback_providers:
@@ -61,7 +67,14 @@ fallback_providers:
   - provider: openrouter
     model: qwen/qwen3-next-80b-a3b-instruct:free
 toolsets:
-  - hermes-cli
+  - web
+  - vision
+  - memory
+  - todo
+  - cronjob
+  - session_search
+  - skills
+  - clarify
 EOF
 
 # Secrets + WhatsApp whitelist (only these numbers get replies).

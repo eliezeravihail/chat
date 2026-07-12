@@ -57,3 +57,23 @@ sudo env "PATH=$PATH" hermes gateway start --system
 
 אם מודל חינמי ברשימת ה-fallback התיישן — ערוך את `~/.hermes/config.yaml`
 (רשימת `fallback_providers`) לכל slug עדכני מ-<https://openrouter.ai/models/?q=free>.
+
+## גבולות אבטחה — מה הבוט יכול ומה לא
+
+שכבות ההגנה שהסקריפט מגדיר:
+
+1. **מי מדבר איתו:** רק מספרים ב-`WHATSAPP_ALLOWED_USERS` (‏`~/.hermes/.env`).
+   כל השאר נדחים. שכבה שנייה: `hermes pairing` (אישור ידני).
+2. **אילו כלים יש לו:** הסקריפט **מצמצם בכוונה** את ה-toolsets ל: חיפוש ברשת,
+   ניתוח תמונות, זיכרון, תזכורות (cron), משימות, חיפוש בשיחות עבר, skills, שאלות
+   הבהרה. **מושבת בכוונה:** `terminal` (שורת פקודה על השרת!), `file` (קריאת
+   קבצים — כולל `.env` עם המפתח!), `code_execution`, `browser`, `computer_use`.
+   ברירת המחדל של Hermes ‏(`hermes-cli`) כוללת את כולם — אל תחזיר אותה בבוט
+   שחברים מדברים איתו.
+3. **סודות:** המפתח ב-`~/.hermes/.env` ‏(chmod 600). כל עוד `terminal`/`file`
+   כבויים — המודל לא יכול להגיע אליו.
+4. **בידוד:** הכל רץ על VM נפרד — גם במקרה הגרוע, הנזק תחום לשרת הזה ולקרדיט
+   ב-OpenRouter (שאפשר להגביל ב-<https://openrouter.ai/settings/credits>).
+
+להחזרת כלי למתקדמים: הוסף את שמו ל-`toolsets` ב-`config.yaml` והפעל מחדש את
+ה-gateway. רשימת הכלים המלאה: `hermes tools` (בטרמינל אינטראקטיבי).

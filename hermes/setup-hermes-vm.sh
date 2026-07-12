@@ -54,11 +54,12 @@ mkdir -p "$HH"
 # Primary model + free fallback chain. Edit freely — `hermes fallback list`
 # shows the effective chain. Free slugs rot; replace with any current ones.
 #
-# SECURITY: WhatsApp gets ZERO tools (platform_toolsets.whatsapp: []) —
-# pure language-model chat only. Verified empirically: an empty platform
-# list yields 0 tool schemas. Hermes' default ("hermes-cli") would give
-# the model terminal, file access and code execution ON THIS VM.
-# The owner's own CLI sessions keep a safe read-only-ish set (toolsets).
+# SECURITY: ZERO tools on every channel (verified empirically: an empty
+# platform list yields 0 tool schemas) — pure language-model chat only.
+# Hermes' default ("hermes-cli") would give the model terminal, file
+# access and code execution ON THIS VM. The owner opted out of CLI use,
+# so nothing is enabled anywhere; to add a tool later, list it under the
+# relevant platform_toolsets entry.
 cat > "$HH/config.yaml" <<EOF
 model: ${PRIMARY_MODEL}
 fallback_providers:
@@ -66,19 +67,11 @@ fallback_providers:
     model: meta-llama/llama-3.3-70b-instruct:free
   - provider: openrouter
     model: qwen/qwen3-next-80b-a3b-instruct:free
-# WhatsApp (the friend's channel): no tools at all — chat only.
 platform_toolsets:
   whatsapp: []
-# CLI (you, over SSH): safe tools only — no terminal/file/code-exec.
-toolsets:
-  - web
-  - vision
-  - memory
-  - todo
-  - cronjob
-  - session_search
-  - skills
-  - clarify
+  ntfy: []
+  cli: []
+toolsets: []
 EOF
 
 # Secrets + WhatsApp whitelist (only these numbers get replies).

@@ -30,7 +30,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         uses: appleboy/ssh-action@v1
         env:
-          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER }}
           TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
           TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
           TWILIO_FROM: ${{ secrets.TWILIO_FROM }}

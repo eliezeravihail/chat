@@ -64,12 +64,19 @@ async def notify(client: httpx.AsyncClient, text: str, high: bool = False) -> No
     if not NTFY_TOPIC:
         return
     try:
+        # ntfy title/tags travel in HTTP headers, which must be ASCII. Keep the
+        # Hebrew in the body (UTF-8); use an ASCII title + the markdown flag so
+        # the emoji/Hebrew body renders. (Hebrew in a header crashes httpx.)
         await client.post(
             f"{NTFY_SERVER}/{NTFY_TOPIC}",
-            data=text.encode("utf-8"),
-            headers={"Title": "בוט Twilio", "Priority": "high" if high else "default"},
+            content=text.encode("utf-8"),
+            headers={
+                "Title": "WhatsApp bot",
+                "Priority": "high" if high else "default",
+                "Markdown": "yes",
+            },
         )
-    except httpx.HTTPError as exc:
+    except Exception as exc:  # noqa: BLE001 — never let a notification crash the bot
         print("ntfy push failed:", exc)
 
 

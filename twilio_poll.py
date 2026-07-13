@@ -158,6 +158,9 @@ async def main() -> None:
     print(f"polling Twilio every {POLL_SECONDS}s — מאזין ל: {', '.join(sorted(ALLOWED))}. Ctrl-C לעצור.")
     first = True
     async with httpx.AsyncClient(timeout=30) as client:
+        # Startup ping to ntfy — confirms the bot is running AND that the ntfy
+        # pipe works, independent of WhatsApp (which may be at its daily limit).
+        await notify(client, "🤖 הבוט עלה ורץ (Twilio). מאזין להודעות.")
         await announce(client)
         while True:
             try:

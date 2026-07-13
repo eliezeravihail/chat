@@ -75,25 +75,37 @@ python twilio_poll.py
 1. <https://console.cloud.google.com> → **Compute Engine → Create instance**.
 2. בחר: **Region** `us-central1`, **Machine type** `e2-micro`, **Boot disk**
    Ubuntu 24.04 → **Create**.
-3. לחץ על כפתור **SSH** (נפתח טרמינל בדפדפן, על השרת). הרץ בו:
+3. לחץ על כפתור **SSH** (נפתח טרמינל בדפדפן, על השרת). הרץ בו **פקודה אחת**:
 
 ```bash
-sudo apt update && sudo apt install -y git python3 python3-venv tmux
-git clone https://github.com/eliezeravihail/chat.git && cd chat
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env && nano .env         # מלא את השדות, שמור (Ctrl-O) וצא (Ctrl-X)
-tmux new -s bot
-.venv/bin/python twilio_poll.py
+curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/setup-twilio-vm.sh -o setup.sh && bash setup.sh
 ```
 
-4. כדי שהבוט ימשיך לרוץ אחרי שתסגור: נתק מ-`tmux` עם **Ctrl-b** ואז **d**.
-   לחזרה: `tmux attach -t bot`.
+הסקריפט מתקין הכל, יוצר **שירות systemd** (רץ 24/7, עולה מחדש בקריסה/ריסטארט,
+בלי tmux), ומדפיס בסוף את **רשימת הסודות** להוסיף ב-GitHub. הוא **לא שואל
+פרטים** — כל ההגדרות מגיעות מ-GitHub Secrets (מקור אמת יחיד).
 
 **אין צורך בפתיחת פורטים, HTTPS או webhook** — ה-polling הוא חיבור יוצא בלבד.
 
 > **למה Google?** Oracle מכבה מכונות בטלות (הבוט שלנו בטל רוב הזמן), ו-AWS/Azure
 > כבר לא מציעים VM חינמי לתמיד. e2-micro חינמי לתמיד ולא נכבה.
+
+### עדכון אוטומטי מ-GitHub (push → נפרס ל-VM לבד)
+
+זה **חלק מההקמה**, לא צעד נפרד. `setup-twilio-vm.sh` מדפיס את כל הסודות — הוסף
+אותם ב-**GitHub → Settings → Secrets and variables → Actions → New repository
+secret**:
+
+| סוד | ל-מה |
+| --- | --- |
+| `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY` | חיבור ה-Action ל-VM |
+| `OPENROUTER_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `ALLOWED_WA_ID` | הגדרות הבוט (במקום `.env`) |
+| `REDIS_URL`, `DEFAULT_MODEL` | אופציונלי |
+
+ואז `git push` ל-`main` (או Actions → **deploy-gcp** → Run workflow). הזרימה
+(`.github/workflows/deploy-gcp.yml`) מתחברת ל-VM, מושכת קוד, **כותבת `.env`
+מהסודות**, ומפעילה מחדש את השירות. **כל push הבא — או עריכת סוד — מתעדכן לבד.**
+אין שאלות ואין הקלדת פרטים על ה-VM.
 
 ---
 

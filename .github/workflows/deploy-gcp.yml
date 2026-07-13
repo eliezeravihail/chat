@@ -1,0 +1,62 @@
+name: deploy-gcp
+
+# On every push to main: SSH into the GCP VM, pull the code, write .env
+# from GitHub Secrets (single source of truth — no prompts, no secrets
+# stored on the VM by hand), reinstall deps, restart the systemd service.
+# Skips cleanly until GCP_VM_HOST is set. Run setup-twilio-vm.sh on the VM
+# once to create the venv/service and print all the secrets to add.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip if not configured
+        id: gate
+        env:
+          HOST: ${{ secrets.GCP_VM_HOST }}
+        run: |
+          if [ -z "$HOST" ]; then
+            echo "GCP_VM_HOST not set — run setup-twilio-vm.sh on the VM and add the secrets. Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy over SSH (pull + write .env from secrets + restart)
+        if: steps.gate.outputs.run == 'true'
+        uses: appleboy/ssh-action@v1
+        env:
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM: ${{ secrets.TWILIO_FROM }}
+          ALLOWED_WA_ID: ${{ secrets.ALLOWED_WA_ID }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          DEFAULT_MODEL: ${{ secrets.DEFAULT_MODEL }}
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_VM_SSH_KEY }}
+          envs: OPENROUTER_KEY,TWILIO_ACCOUNT_SID,TWILIO_AUTH_TOKEN,TWILIO_FROM,ALLOWED_WA_ID,REDIS_URL,DEFAULT_MODEL
+          script: |
+            set -e
+            cd ~/chat
+            git pull --ff-only
+            umask 177
+            cat > .env <<ENV
+            OPENROUTER_KEY=${OPENROUTER_KEY}
+            TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+            TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+            TWILIO_FROM=${TWILIO_FROM:-whatsapp:+14155238886}
+            ALLOWED_WA_ID=${ALLOWED_WA_ID}
+            ENV
+            [ -n "${REDIS_URL}" ]     && echo "REDIS_URL=${REDIS_URL}"         >> .env || true
+            [ -n "${DEFAULT_MODEL}" ] && echo "DEFAULT_MODEL=${DEFAULT_MODEL}" >> .env || true
+            ./.venv/bin/pip install -q -r requirements.txt
+            sudo systemctl restart wa-bot
+            sleep 2
+            systemctl is-active wa-bot

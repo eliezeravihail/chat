@@ -330,10 +330,12 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
         cands = [lg] + [m for m in cands if m != lg]
     cands = cands[:MAX_TRIES]
 
+    errors: list[str] = []
     for model in cands:
         reply, err = await _call_openrouter(model, messages)
         if reply is None:
-            print("model failed:", model, err[:100])
+            print("model failed:", model, err[:150], flush=True)
+            errors.append(f"{model}: {err[:160]}")
             continue
 
         if current == "auto":
@@ -348,13 +350,18 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
         tag = f"\n\n_— {model}_" if SHOW_MODEL else ""
         return note + to_whatsapp(reply) + tag
 
-    if vision:
-        return "⚠️ אף מודל ראייה חינמי זמין כרגע. נסה שוב מאוחר יותר, או /model claude."
-    return (
-        "⚠️ המודלים החינמיים עמוסים כרגע (rate limit).\n"
-        "אפשרויות: נסה שוב בעוד רגע · /model deepseek (זול מאוד) · "
-        "או הוסף קצת קרדיט ב-OpenRouter כדי להעלות את המגבלה של המודלים החינמיים."
-    )
+    # All candidates failed — surface the REAL reason (auth/quota/rate-limit)
+    # instead of guessing, so it can be diagnosed straight from the chat.
+    detail = "\n".join(errors) if errors else "לא ידוע"
+    if "401" in detail or "auth" in detail.lower():
+        hint = "\n\n🔑 מפתח OpenRouter שגוי/חסר (401). בדוק את הסוד OPENROUTER_KEY ב-GitHub."
+    elif "402" in detail:
+        hint = "\n\n💳 חוסר קרדיט (402) ב-OpenRouter."
+    elif "429" in detail:
+        hint = "\n\n⏳ עומס/מגבלת קצב (429). נסה שוב בעוד רגע, או /model deepseek."
+    else:
+        hint = ""
+    return f"⚠️ כל המודלים נכשלו:\n{detail}{hint}"
 
 
 # --- commands ----------------------------------------------------------

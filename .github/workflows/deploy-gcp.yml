@@ -1,0 +1,44 @@
+name: deploy-gcp
+
+# Auto-deploy to your Google Cloud VM on every push to main: SSH in, pull
+# the latest code, reinstall deps, restart the systemd service. Skips
+# silently until you configure the secrets (see enable-autodeploy.sh):
+#   GCP_VM_HOST    the VM's external IP
+#   GCP_VM_USER    the Linux username on the VM
+#   GCP_VM_SSH_KEY the private deploy key (whole PEM block)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip if not configured
+        id: gate
+        env:
+          HOST: ${{ secrets.GCP_VM_HOST }}
+        run: |
+          if [ -z "$HOST" ]; then
+            echo "GCP_VM_HOST not set — run enable-autodeploy.sh on the VM first. Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy over SSH (git pull + restart)
+        if: steps.gate.outputs.run == 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_VM_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/chat
+            git pull --ff-only
+            ./.venv/bin/pip install -q -r requirements.txt
+            sudo systemctl restart wa-bot
+            sleep 2
+            systemctl is-active wa-bot

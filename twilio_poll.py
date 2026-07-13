@@ -61,7 +61,6 @@ AUTH = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 HEARTBEAT_HOURS = float(os.environ.get("HEARTBEAT_HOURS", "6"))
-_alerted = False  # don't spam ntfy — one alert per limit-hit episode
 
 
 async def notify(client: httpx.AsyncClient, text: str, high: bool = False) -> None:
@@ -85,8 +84,12 @@ async def notify(client: httpx.AsyncClient, text: str, high: bool = False) -> No
         print("ntfy push failed:", exc)
 
 
-async def send_text(client: httpx.AsyncClient, to_digits: str, text: str) -> None:
-    global _alerted
+async def send_text(
+    client: httpx.AsyncClient, to_digits: str, text: str, alert: bool = True
+) -> None:
+    """Send a WhatsApp reply via Twilio. If a send fails and alert=True, push an
+    ntfy alert EVERY time (no latch) — so each attempt tells you the state.
+    Startup/greeting sends pass alert=False to avoid noise."""
     to = f"whatsapp:+{to_digits}"
     for chunk in core.split_chunks(text) if text else [""]:
         r = await client.post(
@@ -95,19 +98,16 @@ async def send_text(client: httpx.AsyncClient, to_digits: str, text: str) -> Non
             data={"From": TWILIO_FROM, "To": to, "Body": chunk},
         )
         if r.status_code < 400:
-            _alerted = False  # a successful send clears the alert latch
             continue
         body = r.text[:300]
         print("send failed:", r.status_code, body, flush=True)
-        # Detect the sandbox daily-message limit specifically.
-        limit_hit = "63038" in body or "daily messages limit" in body.lower()
-        if not _alerted:
-            _alerted = True
-            if limit_hit:
-                await notify(client, "⚠️ הגעת למגבלת 50 ההודעות היומית של Twilio (63038). "
-                                     "לא באג — מתאפס בעוד ~24 שעות.", high=True)
+        if alert:
+            if "63038" in body or "daily messages limit" in body.lower():
+                await notify(client, "⚠️ ניסית לשלוח — הבוט לא הצליח להשיב: מגבלת 50 "
+                                     "ההודעות היומית (63038). מתאפס בעוד ~24 שעות.", high=True)
             else:
-                await notify(client, f"⚠️ שליחת הודעה נכשלה ({r.status_code}). בדוק את הבוט.", high=True)
+                await notify(client, f"⚠️ ניסית לשלוח — התשובה נכשלה ({r.status_code}).", high=True)
+        return  # one alert per message, then stop (further chunks would fail too)
 
 
 async def fetch_image(client: httpx.AsyncClient, sid: str) -> str | None:
@@ -160,7 +160,7 @@ async def announce(client: httpx.AsyncClient) -> None:
         return
     for num in ALLOWED:
         try:
-            await send_text(client, num, STARTUP_MESSAGE)
+            await send_text(client, num, STARTUP_MESSAGE, alert=False)
             print("startup message sent to", num)
         except Exception as exc:  # noqa: BLE001
             print("startup message to", num, "failed:", exc)

@@ -81,10 +81,9 @@ python twilio_poll.py
 curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/setup-twilio-vm.sh -o setup.sh && bash setup.sh
 ```
 
-הסקריפט מתקין הכל, שואל את 4 הערכים (מפתח OpenRouter, ‏Account SID, ‏Auth Token,
-המספרים המורשים), ומריץ את הבוט כ**שירות systemd** — רץ 24/7, עולה מחדש בקריסה
-או ריסטארט, בלי tmux. פקודות: `journalctl -u wa-bot -f` (לוגים),
-`sudo systemctl restart wa-bot` (הפעלה מחדש).
+הסקריפט מתקין הכל, יוצר **שירות systemd** (רץ 24/7, עולה מחדש בקריסה/ריסטארט,
+בלי tmux), ומדפיס בסוף את **רשימת הסודות** להוסיף ב-GitHub. הוא **לא שואל
+פרטים** — כל ההגדרות מגיעות מ-GitHub Secrets (מקור אמת יחיד).
 
 **אין צורך בפתיחת פורטים, HTTPS או webhook** — ה-polling הוא חיבור יוצא בלבד.
 
@@ -93,15 +92,20 @@ curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/setup-twil
 
 ### עדכון אוטומטי מ-GitHub (push → נפרס ל-VM לבד)
 
-כדי שכל שינוי קוד ייפרס ל-VM אוטומטית, בלי SSH ידני: הרץ **פעם אחת** על ה-VM
-```bash
-bash ~/chat/enable-autodeploy.sh
-```
-הוא מייצר מפתח deploy ומדפיס שלושה ערכים. הוסף אותם ב-**GitHub → Settings →
-Secrets and variables → Actions → New repository secret**:
-`GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY`. מעכשיו כל `git push` ל-`main`
-מתחבר ל-VM, מושך את הקוד ומפעיל מחדש את השירות (הזרימה:
-`.github/workflows/deploy-gcp.yml`).
+זה **חלק מההקמה**, לא צעד נפרד. `setup-twilio-vm.sh` מדפיס את כל הסודות — הוסף
+אותם ב-**GitHub → Settings → Secrets and variables → Actions → New repository
+secret**:
+
+| סוד | ל-מה |
+| --- | --- |
+| `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY` | חיבור ה-Action ל-VM |
+| `OPENROUTER_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `ALLOWED_WA_ID` | הגדרות הבוט (במקום `.env`) |
+| `REDIS_URL`, `DEFAULT_MODEL` | אופציונלי |
+
+ואז `git push` ל-`main` (או Actions → **deploy-gcp** → Run workflow). הזרימה
+(`.github/workflows/deploy-gcp.yml`) מתחברת ל-VM, מושכת קוד, **כותבת `.env`
+מהסודות**, ומפעילה מחדש את השירות. **כל push הבא — או עריכת סוד — מתעדכן לבד.**
+אין שאלות ואין הקלדת פרטים על ה-VM.
 
 ---
 

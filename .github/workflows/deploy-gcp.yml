@@ -1,10 +1,16 @@
 name: deploy-gcp
 
-# On every push to main: SSH into the GCP VM, pull the code, write .env
-# from GitHub Secrets (single source of truth — no prompts, no secrets
-# stored on the VM by hand), reinstall deps, restart the systemd service.
-# Skips cleanly until GCP_VM_HOST is set. Run setup-twilio-vm.sh on the VM
-# once to create the venv/service and print all the secrets to add.
+# Auto-deploy to the GCP VM on push to main. WHAT gets deployed is chosen by a
+# repository *Variable* (not a secret) named DEPLOY_TARGET:
+#   twilio  (default) → the Twilio polling bot: pull, write .env from secrets,
+#                       restart the wa-bot service.
+#   hermes            → the Hermes agent: pull the repo, restart the hermes
+#                       gateway service.
+#   off / none        → skip auto-deploy entirely (push code without touching
+#                       the VM).
+# Set it at: GitHub → Settings → Secrets and variables → Actions → Variables
+#            → New repository variable → DEPLOY_TARGET = twilio | hermes | off
+# Skips cleanly until GCP_VM_HOST is set.
 
 on:
   push:
@@ -15,19 +21,28 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Skip if not configured
+      - name: Decide target
         id: gate
         env:
           HOST: ${{ secrets.GCP_VM_HOST }}
+          TARGET: ${{ vars.DEPLOY_TARGET }}
         run: |
+          TARGET="${TARGET:-twilio}"          # default when the variable is unset
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           if [ -z "$HOST" ]; then
-            echo "GCP_VM_HOST not set — run setup-twilio-vm.sh on the VM and add the secrets. Skipping."
+            echo "GCP_VM_HOST not set — skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ "$TARGET" = "off" ] || [ "$TARGET" = "none" ]; then
+            echo "DEPLOY_TARGET=$TARGET — auto-deploy disabled."
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
+            echo "Deploying target: $TARGET"
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Deploy over SSH (pull + write .env from secrets + restart)
-        if: steps.gate.outputs.run == 'true'
+
+      # --- Twilio bot ---------------------------------------------------
+      - name: Deploy Twilio bot
+        if: steps.gate.outputs.run == 'true' && steps.gate.outputs.target == 'twilio'
         uses: appleboy/ssh-action@v1
         env:
           OPENROUTER_KEY: ${{ secrets.OPENROUTER }}
@@ -60,3 +75,20 @@ jobs:
             sudo systemctl restart wa-bot
             sleep 2
             systemctl is-active wa-bot
+
+      # --- Hermes agent -------------------------------------------------
+      - name: Deploy Hermes agent
+        if: steps.gate.outputs.run == 'true' && steps.gate.outputs.target == 'hermes'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_VM_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/chat
+            git pull --ff-only
+            # Restart the Hermes gateway (config/secrets live in ~/.hermes, set
+            # up once by hermes/setup-hermes-vm.sh — not written from here).
+            ~/hermes-env/bin/hermes gateway restart || sudo systemctl restart hermes-gateway || true
+            echo "hermes restarted"

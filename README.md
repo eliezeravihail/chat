@@ -86,17 +86,29 @@ sudo systemctl restart wa-bot     # הפעלה מחדש
 
 ## מה ה-GitHub Action עושה
 
-הקובץ `.github/workflows/deploy-gcp.yml` הוא **הפריסה האוטומטית** של גרסת Twilio.
-בכל **push ל-`main`** (או הפעלה ידנית ב-Actions → deploy-gcp → Run workflow), הוא:
+הקובץ `.github/workflows/deploy-gcp.yml` הוא **הפריסה האוטומטית**. בכל **push
+ל-`main`** (או הפעלה ידנית ב-Actions → deploy-gcp → Run workflow), הוא:
 
 1. מתחבר ל-VM שלך ב-SSH (לפי הסודות `GCP_VM_HOST/USER/SSH_KEY`).
 2. מושך את הקוד העדכני (`git pull`).
 3. **כותב את קובץ ה-`.env`** על ה-VM מתוך סודות GitHub (המפתחות **לא** נשמרים
    ידנית על השרת — מקור אמת יחיד).
-4. מתקין תלויות ומפעיל מחדש את השירות (`systemctl restart wa-bot`).
+4. מתקין תלויות ומפעיל מחדש את השירות.
 
-כך אתה אף פעם לא נוגע בשרת ידנית: משנים קוד או סוד → הבוט מתעדכן לבד.
-(ה-Action מדלג בשקט אם הסוד `GCP_VM_HOST` לא הוגדר עדיין.)
+### בוחרים מה נפרס — משתנה `DEPLOY_TARGET` (Variable, לא סוד)
+
+מה בדיוק נפרס נקבע ע"י **Repository Variable** בשם `DEPLOY_TARGET`. זה **משתנה
+רגיל, לא סוד** — נמצא ב-GitHub → Settings → Secrets and variables → Actions →
+לשונית **Variables** → New repository variable.
+
+| ערך | מה נפרס |
+| --- | --- |
+| `twilio` (ברירת מחדל אם ריק) | בוט ה-Twilio: git pull, כתיבת `.env` מהסודות, restart ל-`wa-bot` |
+| `hermes` | סוכן Hermes: git pull, restart ל-gateway של Hermes |
+| `off` / `none` | **מכבה את הפריסה האוטומטית** — push לא נוגע ב-VM |
+
+כך אתה שולט מ-GitHub, בלי לגעת בקוד: רוצה להשהות פריסות? שים `off`. עברת ל-
+Hermes? שים `hermes`. (ה-Action מדלג בשקט אם `GCP_VM_HOST` לא הוגדר.)
 
 ---
 

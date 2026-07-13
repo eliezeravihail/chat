@@ -1,168 +1,104 @@
-# chat — עוזר WhatsApp חכם בעברית
+# chat — בוט WhatsApp חכם בעברית
 
-> ## 🚀 המסלול המומלץ כעת: [Hermes Agent בענן חינמי → HERMES.md](HERMES.md)
-> ה-sandbox של Twilio מוגבל ל-**50 הודעות ביום** — לא מעשי לשימוש אמיתי.
-> המסלול החדש: סוכן Hermes מלא (זיכרון, כלים, בלי מגבלות) על VM חינמי,
-> עם מספר ייעודי. סקריפט הקמה אוטומטי: `hermes/setup-hermes-vm.sh`.
-> ההוראות למטה (Twilio) נשארות לבדיקות ולנפחים קטנים.
+בוט אישי שמחבר WhatsApp למודלי שפה (HY3 / Claude / GPT / חינמיים). שיחה טבעית
+בעברית, זיכרון, ושאלות על תמונות.
 
-בוט WhatsApp אישי המחובר למודלי שפה (חינמיים, או Claude / GPT). שיחה טבעית
-בעברית, זיכרון שיחה, ושאלות על תמונות. מבוסס **Twilio** — בלי חשבון פייסבוק,
-בלי סיכון חסימה, **ובלי שרת או ngrok** (הבוט "שואל" את Twilio על הודעות חדשות).
+יש **שתי גרסאות** — בחר אחת:
 
-```
-WhatsApp ⇄ Twilio ⇄ twilio_poll.py ⇄ מודל שפה (OpenRouter)
-```
+| גרסה | יתרון | חיסרון | מדריך |
+| --- | --- | --- | --- |
+| **1 · Twilio** (רצה עכשיו) | הכי פשוט, רשמי, בלי סיכון חסימה | מגבלת **50 הודעות/יום** (sandbox) | כאן למטה ⬇️ |
+| **2 · Hermes** (מתקדם) | **בלי מגבלת הודעות**, סוכן מלא | דורש מספר WhatsApp ייעודי + טלפון ישן | [HERMES.md](HERMES.md) |
 
-שתי דרכים: [מקומי (על המחשב שלך)](#דרך-1--מקומי) או [בענן (תמיד פעיל, 24/7)](#דרך-2--בענן-247).
+שתי הגרסאות רצות על אותו **VM חינמי** של Google Cloud (e2-micro).
 
 ---
 
-## לפני שמתחילים (משותף לשתי הדרכים)
+## מבנה המאגר — מה כל קובץ
 
-1. **מפתח OpenRouter** (חינם): <https://openrouter.ai/keys> → **Create Key**.
-2. **חשבון Twilio** (חינם — קרדיט ה-trial מספיק, בלי כרטיס אשראי): <https://www.twilio.com/try-twilio>.
-3. **הפעל WhatsApp Sandbox:** ב-Console → **Messaging → Try it out → Send a
-   WhatsApp message**. תקבל **מספר sandbox** (בד"כ ‎+1 415 523 8886‎ = `TWILIO_FROM`)
-   וקוד הצטרפות `join <מילה>`.
-4. **כל מי שישתמש בבוט** (המשתמש, וגם אתה לבדיקה) שולח מה-WhatsApp שלו את
-   `join <מילה>` אל מספר ה-sandbox — פעם אחת.
-5. מהעמוד הראשי ב-Console: **Account SID** ו-**Auth Token**.
-
-צור קובץ `.env` (העתק מ-`.env.example`) ומלא:
-```bash
-OPENROUTER_KEY=sk-or-...
-TWILIO_ACCOUNT_SID=AC...
-TWILIO_AUTH_TOKEN=...
-TWILIO_FROM=whatsapp:+14155238886
-# המספרים שהבוט עונה להם (מופרדים בפסיק). למשל המשתמש + אתה לבדיקה:
-ALLOWED_WA_ID=whatsapp:+972500000000,whatsapp:+972526509692
-STARTUP_MESSAGE=🤖 הבוט מחובר ומוכן! כתוב לי הודעה ואענה.
-```
-
-> הבוט עונה **רק** למספרים ב-`ALLOWED_WA_ID`, ולכל אחד יש זיכרון שיחה נפרד.
+| קובץ | תפקיד | שייך ל |
+| --- | --- | --- |
+| `core.py` | המוח: מודלים, זיכרון, פקודות, עברית | Twilio |
+| `twilio_poll.py` | הבוט — מושך הודעות מ-Twilio ועונה | Twilio |
+| `setup-twilio-vm.sh` | הקמת ה-VM בפקודה אחת | Twilio |
+| `.github/workflows/deploy-gcp.yml` | פריסה אוטומטית (ראה [למטה](#מה-ה-github-action-עושה)) | Twilio |
+| `.env.example` | דוגמת הגדרות (להרצה מקומית) | Twilio |
+| `requirements.txt` | תלויות Python | Twilio |
+| `hermes/setup-hermes-vm.sh` | הקמת Hermes בפקודה אחת | Hermes |
+| `HERMES.md` | המדריך המלא ל-Hermes | Hermes |
 
 ---
 
-## דרך 1 — מקומי
+# גרסה 1 — Twilio
 
-על המחשב שלך. צריך **Python 3.11+**.
+**מה זה:** הבוט הפשוט שלנו (`twilio_poll.py`) שמדבר עם WhatsApp דרך ה-sandbox
+של Twilio, ועם המודלים דרך OpenRouter. **זו הגרסה שרצה אצלך עכשיו.**
 
-```bash
-git clone https://github.com/eliezeravihail/chat.git
-cd chat
-python -m pip install -r requirements.txt
-copy .env.example .env      # Windows.  ב-mac/linux: cp .env.example .env
-```
+**מגבלה:** ה-sandbox מוגבל ל-50 הודעות/יום. לשימוש כבד — עבור ל[Hermes](HERMES.md).
 
-מלא את `.env` (השדות שלמעלה) ושמור. ואז הרץ:
-```bash
-python twilio_poll.py
-```
+### איך זה רץ בענן (מה שכבר עשית)
 
-זהו! הבוט עולה, שולח הודעת פתיחה, ומגיב תוך 2–4 שניות. ✅
-**אין ngrok, אין webhook להגדיר, אין כתובת ציבורית.**
-(הבוט חי כל עוד החלון פתוח.)
+1. **VM:** ‏<https://console.cloud.google.com> → Compute Engine → Create instance
+   → `e2-micro`, region `us-central1`, Ubuntu 24.04.
+2. **הקמה** — בכפתור **SSH** של ה-VM, פקודה אחת:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/setup-twilio-vm.sh -o setup.sh && bash setup.sh
+   ```
+   הסקריפט מתקין הכל, יוצר שירות systemd, ומדפיס את **רשימת הסודות** להוסיף.
+3. **סודות** — ‏GitHub → Settings → Secrets and variables → Actions. הוסף:
+   `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY` (מודפסים בסקריפט),
+   ו-`OPENROUTER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`,
+   `ALLOWED_WA_ID` (הערכים שלך). אופציונלי: `REDIS_URL`, `DEFAULT_MODEL`.
+4. **הפעל:** ‏GitHub → Actions → **deploy-gcp** → Run workflow.
 
----
+מכאן — כל שינוי קוד ב-`main` מתפרס לבד (ראה [למטה](#מה-ה-github-action-עושה)).
 
-## דרך 2 — בענן (24/7)
-
-כדי שהמשתמש יוכל לדבר עם הבוט **מתי שירצה**, גם כשהמחשב שלך כבוי — הרץ את אותו
-סקריפט על VM חינמי. הכי מתאים: **Google Cloud e2-micro** (חינם לתמיד, לא נכבה
-בבטלה).
-
-1. <https://console.cloud.google.com> → **Compute Engine → Create instance**.
-2. בחר: **Region** `us-central1`, **Machine type** `e2-micro`, **Boot disk**
-   Ubuntu 24.04 → **Create**.
-3. לחץ על כפתור **SSH** (נפתח טרמינל בדפדפן, על השרת). הרץ בו **פקודה אחת**:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/setup-twilio-vm.sh -o setup.sh && bash setup.sh
-```
-
-הסקריפט מתקין הכל, יוצר **שירות systemd** (רץ 24/7, עולה מחדש בקריסה/ריסטארט,
-בלי tmux), ומדפיס בסוף את **רשימת הסודות** להוסיף ב-GitHub. הוא **לא שואל
-פרטים** — כל ההגדרות מגיעות מ-GitHub Secrets (מקור אמת יחיד).
-
-**אין צורך בפתיחת פורטים, HTTPS או webhook** — ה-polling הוא חיבור יוצא בלבד.
-
-> **למה Google?** Oracle מכבה מכונות בטלות (הבוט שלנו בטל רוב הזמן), ו-AWS/Azure
-> כבר לא מציעים VM חינמי לתמיד. e2-micro חינמי לתמיד ולא נכבה.
-
-### עדכון אוטומטי מ-GitHub (push → נפרס ל-VM לבד)
-
-זה **חלק מההקמה**, לא צעד נפרד. `setup-twilio-vm.sh` מדפיס את כל הסודות — הוסף
-אותם ב-**GitHub → Settings → Secrets and variables → Actions → New repository
-secret**:
-
-| סוד | ל-מה |
-| --- | --- |
-| `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY` | חיבור ה-Action ל-VM |
-| `OPENROUTER_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `ALLOWED_WA_ID` | הגדרות הבוט (במקום `.env`) |
-| `REDIS_URL`, `DEFAULT_MODEL` | אופציונלי |
-
-ואז `git push` ל-`main` (או Actions → **deploy-gcp** → Run workflow). הזרימה
-(`.github/workflows/deploy-gcp.yml`) מתחברת ל-VM, מושכת קוד, **כותבת `.env`
-מהסודות**, ומפעילה מחדש את השירות. **כל push הבא — או עריכת סוד — מתעדכן לבד.**
-אין שאלות ואין הקלדת פרטים על ה-VM.
-
----
-
-## דרך 3 — Fly.io עם עדכון אוטומטי מ-GitHub (push → מתעדכן לבד)
-
-רוצה שהבוט ירוץ בענן **וגם יתעדכן אוטומטית** בכל שינוי קוד, בלי לגעת בשרת? הבוט
-מתארח ב-Fly (worker קבוע, בלי webhook), ו-GitHub Action פורס אותו בכל push ל-`main`.
-
-**הקמה חד-פעמית:**
-```bash
-curl -L https://fly.io/install.sh | sh
-fly auth login
-fly launch --no-deploy                 # בחר שם אפליקציה; עדכן app ב-fly.toml
-fly secrets set \
-  OPENROUTER_KEY=... TWILIO_ACCOUNT_SID=... TWILIO_AUTH_TOKEN=... \
-  TWILIO_FROM="whatsapp:+14155238886" ALLOWED_WA_ID="whatsapp:+9725XXXXXXXX"
-fly deploy                             # פריסה ראשונה
-
-fly tokens create deploy               # העתק את הטוקן
-```
-ואז ב-**GitHub → Settings → Secrets and variables → Actions → New repository secret**:
-שם `FLY_API_TOKEN`, ערך = הטוקן.
-
-מעכשיו — **כל push ל-`main` פורס אוטומטית** את הקוד העדכני (הזרימה מוגדרת ב-
-`.github/workflows/fly-deploy.yml`). זה בדיוק "להריץ קוד עדכני בקלות", במקום
-לגיטימי — לא לולאה ב-Actions (שאסורה ומוגבלת ל-6 שעות), אלא פריסה ל-worker קבוע.
-
----
-
-## פקודות (בתוך הצ'אט)
+### פקודות (בתוך הצ'אט)
 
 | פקודה | פעולה |
 | --- | --- |
-| `/model <שם>` | החלפת מודל: `claude`, `gpt`, `gemini`, `deepseek`, `llama`, `qwen` |
+| `/model <שם>` | החלפת מודל: `hy3`, `claude`, `gpt`, `auto` (חינמי), `deepseek`... |
 | `/models` | רשימת המודלים והנוכחי |
+| `/credits` | יתרת OpenRouter (נטען / נוצל / נשאר) |
 | `/clear` | ניקוי הזיכרון |
 
-**ברירת המחדל: `tencent/hy3`** — ואם נגמר הקרדיט (או תקלה), הבוט נופל אוטומטית
-למודלים החינמיים 🆓 ומודיע. לשינוי ברירת המחדל: `DEFAULT_MODEL` ב-`.env`
-(סלאג/כינוי, או `auto` לחינמי בלבד). שליחת **תמונה** → הבוט מנתח אותה.
+ברירת המחדל `hy3`; אם נכשל — נפילה אוטומטית לחינמיים. שליחת תמונה → ניתוח.
+המודל נבחר **פר-מספר** (השינוי שלך לא משפיע על משתמש אחר).
+
+### תפעול ה-VM (SSH)
+
+```bash
+sudo systemctl status wa-bot      # מצב
+journalctl -u wa-bot -f           # לוגים חיים
+sudo systemctl restart wa-bot     # הפעלה מחדש
+```
 
 ---
 
-## הערות
+# גרסה 2 — Hermes (בלי מגבלת הודעות)
 
-- **זיכרון מתמשך:** בברירת מחדל הזיכרון נמחק כשעוצרים את הסקריפט. לזיכרון של 30
-  יום חבר Redis חינם מ-<https://upstash.com> — הוסף ל-`.env`:
-  `REDIS_URL=rediss://...`.
-- **הודעת פתיחה** מגיעה רק למספר ששלח `join` + הודעה ב-24 השעות האחרונות (חוק של
-  WhatsApp). הסדר: כולם שולחים `join`, ואז מריצים את הסקריפט.
-- **Sandbox** = סביבת הבדיקה של Twilio (הגבלת קצב קלה; מספיק לשימוש אישי). למספר
-  ייעודי משלך צריך Sender בתשלום ב-Twilio.
-- **רוצה תגובה מיידית** (בלי 2–4 שניות)? יש גם מצב **webhook** (`twilio_bot.py`
-  עם ngrok/Fly.io) — דורש כתובת ציבורית. ראה `.env.example`.
+סוכן מלא של Nous Research על אותו VM, עם מספר WhatsApp ייעודי — **בלי מגבלת
+הודעות, בלי Twilio, בלי פייסבוק.** דורש SIM זול חד-פעמי + טלפון ישן.
 
-<sub>הקוד כולל גם מתאמי **Baileys** (מקומי, מספר משלך) ו-**Meta Cloud API** רשמי —
-`baileys/`, `wa_bot.py`. לא נדרשים לשתי הדרכים שלמעלה.</sub>
+המדריך המלא, כולל סקריפט הקמה בפקודה אחת וגבולות האבטחה: **[HERMES.md](HERMES.md)**.
+
+---
+
+## מה ה-GitHub Action עושה
+
+הקובץ `.github/workflows/deploy-gcp.yml` הוא **הפריסה האוטומטית** של גרסת Twilio.
+בכל **push ל-`main`** (או הפעלה ידנית ב-Actions → deploy-gcp → Run workflow), הוא:
+
+1. מתחבר ל-VM שלך ב-SSH (לפי הסודות `GCP_VM_HOST/USER/SSH_KEY`).
+2. מושך את הקוד העדכני (`git pull`).
+3. **כותב את קובץ ה-`.env`** על ה-VM מתוך סודות GitHub (המפתחות **לא** נשמרים
+   ידנית על השרת — מקור אמת יחיד).
+4. מתקין תלויות ומפעיל מחדש את השירות (`systemctl restart wa-bot`).
+
+כך אתה אף פעם לא נוגע בשרת ידנית: משנים קוד או סוד → הבוט מתעדכן לבד.
+(ה-Action מדלג בשקט אם הסוד `GCP_VM_HOST` לא הוגדר עדיין.)
+
+---
 
 ## רישיון
 

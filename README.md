@@ -73,6 +73,20 @@ journalctl -u wa-bot -f           # לוגים חיים
 sudo systemctl restart wa-bot     # הפעלה מחדש
 ```
 
+### ניטור — האם הגעת למגבלת 50/יום? (התראה ל-ntfy)
+
+`monitor-twilio.py` בודק את פעילות Twilio של היום (כמה נשלח, ואילו שגיאות —
+במיוחד `63038` = מגבלת ה-50) ודוחף סיכום ל-**ntfy** — התראה לטלפון שעובדת גם
+כשה-WhatsApp חסום. אפשר לראות בדפדפן ב-`https://ntfy.sh/<topic>` (בלי אפליקציה):
+
+```bash
+cd ~/chat
+# בחר topic כלשהו לא-ניחוש (הוא מתפקד כסיסמה בערוץ הציבורי):
+NTFY_TOPIC=eli-bot-7hK2p ./.venv/bin/python monitor-twilio.py
+# כל שעה אוטומטית:
+( crontab -l 2>/dev/null; echo "0 * * * * cd ~/chat && NTFY_TOPIC=eli-bot-7hK2p ./.venv/bin/python monitor-twilio.py" ) | crontab -
+```
+
 ---
 
 # גרסה 2 — Hermes (בלי מגבלת הודעות)

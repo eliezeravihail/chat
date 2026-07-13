@@ -15,6 +15,10 @@ Env (.env, loaded automatically):
   STARTUP_MESSAGE      optional greeting sent to each allowed number on start
                        (empty = don't send)
   POLL_SECONDS         optional, default 4
+  NTFY_TOPIC           optional — if a Twilio SEND fails (e.g. the 50/day
+                       sandbox limit, error 63038), push an alert to
+                       https://<NTFY_SERVER>/<NTFY_TOPIC>. Empty = no alerts.
+  NTFY_SERVER          optional, default https://ntfy.sh
 
 Run:  python twilio_poll.py
 """
@@ -50,8 +54,27 @@ STARTUP_MESSAGE = os.environ.get(
 BASE = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}"
 AUTH = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+_alerted = False  # don't spam ntfy — one alert per limit-hit episode
+
+
+async def notify(client: httpx.AsyncClient, text: str, high: bool = False) -> None:
+    """Push an out-of-band alert to ntfy (works even when WhatsApp is blocked)."""
+    if not NTFY_TOPIC:
+        return
+    try:
+        await client.post(
+            f"{NTFY_SERVER}/{NTFY_TOPIC}",
+            data=text.encode("utf-8"),
+            headers={"Title": "בוט Twilio", "Priority": "high" if high else "default"},
+        )
+    except httpx.HTTPError as exc:
+        print("ntfy push failed:", exc)
+
 
 async def send_text(client: httpx.AsyncClient, to_digits: str, text: str) -> None:
+    global _alerted
     to = f"whatsapp:+{to_digits}"
     for chunk in core.split_chunks(text) if text else [""]:
         r = await client.post(
@@ -59,8 +82,20 @@ async def send_text(client: httpx.AsyncClient, to_digits: str, text: str) -> Non
             auth=AUTH,
             data={"From": TWILIO_FROM, "To": to, "Body": chunk},
         )
-        if r.status_code >= 400:
-            print("send failed:", r.status_code, r.text[:200])
+        if r.status_code < 400:
+            _alerted = False  # a successful send clears the alert latch
+            continue
+        body = r.text[:300]
+        print("send failed:", r.status_code, body, flush=True)
+        # Detect the sandbox daily-message limit specifically.
+        limit_hit = "63038" in body or "daily messages limit" in body.lower()
+        if not _alerted:
+            _alerted = True
+            if limit_hit:
+                await notify(client, "⚠️ הגעת למגבלת 50 ההודעות היומית של Twilio (63038). "
+                                     "לא באג — מתאפס בעוד ~24 שעות.", high=True)
+            else:
+                await notify(client, f"⚠️ שליחת הודעה נכשלה ({r.status_code}). בדוק את הבוט.", high=True)
 
 
 async def fetch_image(client: httpx.AsyncClient, sid: str) -> str | None:

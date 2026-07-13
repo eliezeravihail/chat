@@ -364,6 +364,33 @@ async def ask_llm(uid: str, prompt: str, image_data_uri: str | None = None) -> s
     return f"⚠️ כל המודלים נכשלו:\n{detail}{hint}"
 
 
+# --- credits ------------------------------------------------------------
+async def openrouter_credits() -> str:
+    """Report OpenRouter balance (loaded / used / remaining) for the key."""
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(
+                "https://openrouter.ai/api/v1/credits",
+                headers={"Authorization": f"Bearer {OPENROUTER_KEY}"},
+            )
+    except httpx.HTTPError as exc:
+        return f"⚠️ שגיאה בקבלת היתרה: {exc!r}"
+    if r.status_code >= 400:
+        return f"⚠️ לא הצלחתי לקבל יתרה ({r.status_code}). בדוק את מפתח OpenRouter."
+    try:
+        d = r.json()["data"]
+        total = float(d.get("total_credits", 0))
+        used = float(d.get("total_usage", 0))
+    except (KeyError, ValueError, TypeError):
+        return f"⚠️ תשובה לא צפויה: {r.text[:200]}"
+    return (
+        "💳 OpenRouter\n"
+        f"• נטען:  ${total:.2f}\n"
+        f"• נוצל:  ${used:.4f}\n"
+        f"• נשאר: ${total - used:.2f}"
+    )
+
+
 # --- commands ----------------------------------------------------------
 async def handle_command(uid: str, text: str) -> str | None:
     if not text.startswith("/"):
@@ -374,6 +401,8 @@ async def handle_command(uid: str, text: str) -> str | None:
     if cmd == "clear":
         await store.clear(uid)
         return "🧹 ההקשר נוקה."
+    if cmd in ("credits", "credit", "usage", "יתרה"):
+        return await openrouter_credits()
     if cmd == "models":
         current = await store.get_model(uid)
         aliases = ", ".join(MODEL_ALIASES)
@@ -394,4 +423,4 @@ async def handle_command(uid: str, text: str) -> str | None:
         await store.set_model(uid, model)
         await store.clear(uid)
         return f"✅ הוחלף ל־{model} (ההקשר אופס)."
-    return "פקודה לא מוכרת. נסה /models, /model <שם>, /clear"
+    return "פקודה לא מוכרת. נסה /models, /model <שם>, /credits, /clear"

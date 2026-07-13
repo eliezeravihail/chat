@@ -19,6 +19,10 @@ Env (.env, loaded automatically):
                        sandbox limit, error 63038), push an alert to
                        https://<NTFY_SERVER>/<NTFY_TOPIC>. Empty = no alerts.
   NTFY_SERVER          optional, default https://ntfy.sh
+  HEARTBEAT_HOURS      optional, default 6 — every N hours push a heartbeat to
+                       ntfy WITH today's Twilio message count/errors (read via
+                       the API, which works even when sending is blocked). If
+                       this stops arriving, the bot/VM is down. 0 = disabled.
 
 Run:  python twilio_poll.py
 """
@@ -56,6 +60,7 @@ AUTH = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+HEARTBEAT_HOURS = float(os.environ.get("HEARTBEAT_HOURS", "6"))
 _alerted = False  # don't spam ntfy — one alert per limit-hit episode
 
 
@@ -161,13 +166,61 @@ async def announce(client: httpx.AsyncClient) -> None:
             print("startup message to", num, "failed:", exc)
 
 
+async def twilio_status(client: httpx.AsyncClient) -> str:
+    """Read today's Twilio activity via the API (works even when SENDING is
+    blocked). Returns a short Hebrew summary: received / sent / errors."""
+    import datetime
+    from email.utils import parsedate_to_datetime
+
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    try:
+        r = await client.get(f"{BASE}/Messages.json", auth=AUTH, params={"PageSize": 400})
+        r.raise_for_status()
+        msgs = r.json().get("messages", [])
+    except Exception as exc:  # noqa: BLE001
+        return f"לא הצלחתי לקרוא מ-Twilio: {exc!r}"
+
+    inbound = out = 0
+    limit_hit = False
+    for m in msgs:
+        raw = m.get("date_created") or m.get("date_sent")
+        try:
+            if not raw or parsedate_to_datetime(raw).astimezone(datetime.timezone.utc).date() != today:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if m.get("direction", "").startswith("inbound"):
+            inbound += 1
+        else:
+            out += 1
+        if str(m.get("error_code")) == "63038":
+            limit_hit = True
+    line = f"📊 היום: {inbound} התקבלו · {out} נשלחו (מגבלה: 50)"
+    if limit_hit:
+        line += "\n⚠️ מגבלת 50/יום פעילה (63038) — מתאפס בעוד ~24ש'."
+    return line
+
+
+async def heartbeat_loop(client: httpx.AsyncClient) -> None:
+    """Every HEARTBEAT_HOURS, push a liveness + Twilio-status ping to ntfy.
+    If these stop arriving, the bot or VM is down."""
+    if HEARTBEAT_HOURS <= 0:
+        return
+    while True:
+        await asyncio.sleep(HEARTBEAT_HOURS * 3600)
+        status = await twilio_status(client)
+        await notify(client, f"💓 הבוט פעיל.\n{status}")
+
+
 async def main() -> None:
     print(f"polling Twilio every {POLL_SECONDS}s — מאזין ל: {', '.join(sorted(ALLOWED))}. Ctrl-C לעצור.")
     first = True
     async with httpx.AsyncClient(timeout=30) as client:
         # Startup ping to ntfy — confirms the bot is running AND that the ntfy
         # pipe works, independent of WhatsApp (which may be at its daily limit).
-        await notify(client, "🤖 הבוט עלה ורץ (Twilio). מאזין להודעות.")
+        startup = await twilio_status(client)
+        await notify(client, f"🤖 הבוט עלה ורץ (Twilio).\n{startup}")
+        asyncio.create_task(heartbeat_loop(client))
         await announce(client)
         while True:
             try:

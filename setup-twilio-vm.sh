@@ -37,6 +37,7 @@ Wants=network-online.target
 Type=simple
 User=$(whoami)
 WorkingDirectory=${DIR}
+Environment=PYTHONUNBUFFERED=1
 ExecStart=${DIR}/.venv/bin/python ${DIR}/twilio_poll.py
 Restart=always
 RestartSec=10

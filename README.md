@@ -32,7 +32,7 @@
 # גרסה 1 — Twilio
 
 **מה זה:** הבוט הפשוט שלנו (`twilio_poll.py`) שמדבר עם WhatsApp דרך ה-sandbox
-של Twilio, ועם המודלים דרך OpenRouter. **זו הגרסה שרצה אצלך עכשיו.**
+של Twilio, ועם המודלים דרך OpenRouter.
 
 **מגבלה:** ה-sandbox מוגבל ל-50 הודעות/יום. לשימוש כבד — עבור ל[Hermes](HERMES.md).
 
@@ -128,4 +128,4 @@ Hermes? שים `hermes`. (ה-Action מדלג בשקט אם `GCP_VM_HOST` לא ה
 
 ## רישיון
 
-[MIT](LICENSE) © 2026 Eliezer Avihail
+© 2026 Eliezer Avihail

@@ -178,6 +178,15 @@ class MemoryStore:
         self._seen.append(msg_id)
         return False
 
+    async def is_seen(self, msg_id: str) -> bool:
+        """Peek only — does NOT mark. Used so a message can stay un-processed
+        (e.g. deferred at the daily limit) and be answered later."""
+        return msg_id in self._seen
+
+    async def mark_seen(self, msg_id: str) -> None:
+        if msg_id not in self._seen:
+            self._seen.append(msg_id)
+
 
 class RedisStore:
     def __init__(self, url: str) -> None:
@@ -219,6 +228,13 @@ class RedisStore:
         """
         added = await self._r.set(f"seen:{msg_id}", "1", nx=True, ex=SEEN_TTL)
         return not added
+
+    async def is_seen(self, msg_id: str) -> bool:
+        """Peek only — does NOT mark (see MemoryStore.is_seen)."""
+        return bool(await self._r.exists(f"seen:{msg_id}"))
+
+    async def mark_seen(self, msg_id: str) -> None:
+        await self._r.set(f"seen:{msg_id}", "1", ex=SEEN_TTL)
 
 
 store: MemoryStore | RedisStore = RedisStore(REDIS_URL) if REDIS_URL else MemoryStore()

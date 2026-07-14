@@ -23,6 +23,11 @@ Env (.env, loaded automatically):
                        ntfy WITH today's Twilio message count/errors (read via
                        the API, which works even when sending is blocked). If
                        this stops arriving, the bot/VM is down. 0 = disabled.
+  LIMIT_BACKOFF_MIN    optional, default 15 — after hitting the 50/24h cap
+                       (63038), pause LLM calls + sends for this many minutes so
+                       we don't waste paid LLM calls on undeliverable replies.
+                       Deferred messages are answered automatically once
+                       capacity frees.
 
 Run:  python twilio_poll.py
 """
@@ -32,6 +37,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import time
+from collections import deque
 
 import httpx
 
@@ -62,6 +69,16 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 HEARTBEAT_HOURS = float(os.environ.get("HEARTBEAT_HOURS", "6"))
 
+# --- daily-limit awareness ------------------------------------------------
+# When a send hits the 50/24h sandbox cap (63038), we enter a cooldown: during
+# it we DON'T call the (paid) LLM for a reply we can't deliver, and DON'T mark
+# the message seen — so it's answered once capacity frees. After the cooldown
+# one message "probes"; if it still fails we re-enter the cooldown.
+LIMIT_BACKOFF = float(os.environ.get("LIMIT_BACKOFF_MIN", "15")) * 60
+_blocked_until = 0.0                 # wall-clock; while now < this, sending is capped
+_alerted_sids: deque = deque(maxlen=500)  # sids already alerted during an outage (no spam)
+_pending: dict[str, str] = {}        # sid -> already-generated reply awaiting delivery
+
 
 async def notify(client: httpx.AsyncClient, text: str, high: bool = False) -> None:
     """Push an out-of-band alert to ntfy (works even when WhatsApp is blocked)."""
@@ -86,10 +103,12 @@ async def notify(client: httpx.AsyncClient, text: str, high: bool = False) -> No
 
 async def send_text(
     client: httpx.AsyncClient, to_digits: str, text: str, alert: bool = True
-) -> None:
-    """Send a WhatsApp reply via Twilio. If a send fails and alert=True, push an
-    ntfy alert EVERY time (no latch) — so each attempt tells you the state.
-    Startup/greeting sends pass alert=False to avoid noise."""
+) -> str:
+    """Send a WhatsApp reply via Twilio. Returns 'ok', 'limit' (63038 daily
+    cap — sets the cooldown so we stop wasting LLM calls), or 'fail' (other
+    error). If a send fails and alert=True, push an ntfy alert EVERY time
+    (no latch). Startup/greeting sends pass alert=False to avoid noise."""
+    global _blocked_until
     to = f"whatsapp:+{to_digits}"
     for chunk in core.split_chunks(text) if text else [""]:
         r = await client.post(
@@ -101,13 +120,16 @@ async def send_text(
             continue
         body = r.text[:300]
         print("send failed:", r.status_code, body, flush=True)
-        if alert:
-            if "63038" in body or "daily messages limit" in body.lower():
+        if "63038" in body or "daily messages limit" in body.lower():
+            _blocked_until = time.time() + LIMIT_BACKOFF  # pause LLM+sends until this passes
+            if alert:
                 await notify(client, "⚠️ ניסית לשלוח — הבוט לא הצליח להשיב: מגבלת 50 ההודעות "
                                      "(63038, חלון נע של 24ש'). הקיבולת מתפנה בהדרגה.", high=True)
-            else:
-                await notify(client, f"⚠️ ניסית לשלוח — התשובה נכשלה ({r.status_code}).", high=True)
-        return  # one alert per message, then stop (further chunks would fail too)
+            return "limit"
+        if alert:
+            await notify(client, f"⚠️ ניסית לשלוח — התשובה נכשלה ({r.status_code}).", high=True)
+        return "fail"
+    return "ok"
 
 
 async def fetch_image(client: httpx.AsyncClient, sid: str) -> str | None:
@@ -133,8 +155,29 @@ async def fetch_image(client: httpx.AsyncClient, sid: str) -> str | None:
 async def handle(client: httpx.AsyncClient, msg: dict) -> None:
     sid = msg.get("sid", "")
     sender = _norm(msg.get("from", ""))
-    if not sid or sender not in ALLOWED or await core.store.seen(sid):
+    if not sid or sender not in ALLOWED or await core.store.is_seen(sid):
         return
+
+    # A reply we already generated but couldn't deliver (daily limit): just try
+    # to (re)send the cached text — NO new LLM call, so history isn't polluted.
+    if sid in _pending:
+        if time.time() < _blocked_until:
+            return  # still capped — wait for the next cooldown expiry
+        if await send_text(client, sender, _pending[sid]) != "limit":
+            _pending.pop(sid, None)
+            await core.store.mark_seen(sid)
+        return
+
+    # Fresh message inside the cooldown: defer WITHOUT spending an LLM call.
+    # Alert once per message (so you still know each attempt failed) and leave
+    # it unseen so it's answered when capacity frees.
+    if time.time() < _blocked_until:
+        if sid not in _alerted_sids:
+            _alerted_sids.append(sid)
+            await notify(client, "⚠️ ניסית לשלוח — מגבלת 50 (חלון נע 24ש') פעילה. "
+                                 "אענה אוטומטית כשהקיבולת תתפנה.", high=True)
+        return
+
     body = msg.get("body", "") or ""
     image = None
     if int(msg.get("num_media", "0") or 0) > 0:
@@ -147,7 +190,15 @@ async def handle(client: httpx.AsyncClient, msg: dict) -> None:
             reply = await core.handle_command(sender, body) or await core.ask_llm(sender, body)
     except Exception as exc:  # noqa: BLE001
         reply = f"⚠️ שגיאה: {exc!r}"
-    await send_text(client, sender, reply)
+
+    status = await send_text(client, sender, reply)
+    if status == "limit":
+        # Keep the generated reply and deliver it when capacity frees — so the
+        # (paid) LLM call isn't wasted and the message isn't lost.
+        if len(_pending) < 1000:
+            _pending[sid] = reply
+    else:
+        await core.store.mark_seen(sid)
 
 
 async def announce(client: httpx.AsyncClient) -> None:

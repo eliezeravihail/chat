@@ -42,14 +42,21 @@ MESSAGES = f"https://api.twilio.com/2010-04-01/Accounts/{SID}/Messages.json"
 
 
 def summarize() -> tuple[str, bool]:
-    """Return (human summary, alert?) for today's Twilio messages."""
-    today = datetime.datetime.now(datetime.timezone.utc).date()
+    """Return (human summary, alert?) for Twilio activity in the last 24h.
+
+    The sandbox limit is a *rolling* 24h window of SANDBOX_LIMIT successful
+    sends, not a calendar-day reset. A failed 63038 attempt is still an
+    outbound record, so we split successful sends from failures — otherwise
+    the "sent" count exceeds the limit and looks nonsensical.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    window_start = now - datetime.timedelta(hours=24)
     with httpx.Client(timeout=30) as client:
         r = client.get(MESSAGES, auth=(SID, TOKEN), params={"PageSize": 400})
         r.raise_for_status()
         msgs = r.json().get("messages", [])
 
-    out = inbound = 0
+    sent_ok = inbound = failed = 0
     errors: dict[str, int] = {}
     limit_hit = False
     for m in msgs:
@@ -57,29 +64,38 @@ def summarize() -> tuple[str, bool]:
         if not raw:
             continue
         try:
-            if parsedate_to_datetime(raw).astimezone(datetime.timezone.utc).date() != today:
+            if parsedate_to_datetime(raw).astimezone(datetime.timezone.utc) < window_start:
                 continue
         except (TypeError, ValueError):
             continue
         if m.get("direction", "").startswith("inbound"):
             inbound += 1
-        else:
-            out += 1
+            continue
         code = m.get("error_code")
+        status = m.get("status", "")
         if code:
             errors[str(code)] = errors.get(str(code), 0) + 1
             if str(code) == "63038":
                 limit_hit = True
+        if code or status in ("failed", "undelivered"):
+            failed += 1
+        else:
+            sent_ok += 1
 
-    lines = [f"📊 Twilio היום: {out} יצא · {inbound} נכנס (מתוך {SANDBOX_LIMIT}/יום)"]
+    lines = [
+        f"📊 Twilio ב-24ש' אחרונות: {sent_ok} נשלחו · {inbound} נכנסו "
+        f"(מגבלה: {SANDBOX_LIMIT} בחלון נע)"
+    ]
+    if failed:
+        lines[0] += f" · {failed} נכשלו"
     if errors:
         lines.append("שגיאות: " + ", ".join(f"{c}×{n}" for c, n in errors.items()))
     alert = False
-    if limit_hit:
-        lines.append("⚠️ הגעת למגבלת 50 ההודעות היומית (63038) — לא באג. מתאפס בעוד ~24ש'.")
-        alert = True
-    elif out >= SANDBOX_LIMIT:
-        lines.append("⚠️ קרוב/הגעת למגבלה היומית.")
+    if limit_hit or sent_ok >= SANDBOX_LIMIT:
+        lines.append(
+            "⚠️ מגבלת 50 בחלון נע של 24ש' פעילה (63038) — לא באג. "
+            "הקיבולת מתפנה בהדרגה ככל שהודעות ישנות עוברות את גיל 24ש'."
+        )
         alert = True
     elif errors:
         lines.append("⚠️ יש שגיאות שליחה — בדוק.")

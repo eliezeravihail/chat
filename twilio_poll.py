@@ -103,8 +103,8 @@ async def send_text(
         print("send failed:", r.status_code, body, flush=True)
         if alert:
             if "63038" in body or "daily messages limit" in body.lower():
-                await notify(client, "⚠️ ניסית לשלוח — הבוט לא הצליח להשיב: מגבלת 50 "
-                                     "ההודעות היומית (63038). מתאפס בעוד ~24 שעות.", high=True)
+                await notify(client, "⚠️ ניסית לשלוח — הבוט לא הצליח להשיב: מגבלת 50 ההודעות "
+                                     "(63038, חלון נע של 24ש'). הקיבולת מתפנה בהדרגה.", high=True)
             else:
                 await notify(client, f"⚠️ ניסית לשלוח — התשובה נכשלה ({r.status_code}).", high=True)
         return  # one alert per message, then stop (further chunks would fail too)
@@ -167,12 +167,17 @@ async def announce(client: httpx.AsyncClient) -> None:
 
 
 async def twilio_status(client: httpx.AsyncClient) -> str:
-    """Read today's Twilio activity via the API (works even when SENDING is
-    blocked). Returns a short Hebrew summary: received / sent / errors."""
+    """Read Twilio activity for the last 24h via the API (works even when
+    SENDING is blocked). The sandbox limit is a *rolling* 24h window of 50
+    SUCCESSFUL sends — not a calendar-day reset — so we count the rolling
+    window and split successful sends from failures (a failed 63038 attempt is
+    still an outbound record, so counting raw outbound would exceed 50 and
+    look nonsensical). Returns a short Hebrew summary."""
     import datetime
     from email.utils import parsedate_to_datetime
 
-    today = datetime.datetime.now(datetime.timezone.utc).date()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    window_start = now - datetime.timedelta(hours=24)
     try:
         r = await client.get(f"{BASE}/Messages.json", auth=AUTH, params={"PageSize": 400})
         r.raise_for_status()
@@ -180,24 +185,43 @@ async def twilio_status(client: httpx.AsyncClient) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"לא הצלחתי לקרוא מ-Twilio: {exc!r}"
 
-    inbound = out = 0
+    inbound = sent_ok = failed = 0
     limit_hit = False
+    oldest_ok = None  # timestamp of the oldest SUCCESSFUL send still in the window
     for m in msgs:
         raw = m.get("date_created") or m.get("date_sent")
         try:
-            if not raw or parsedate_to_datetime(raw).astimezone(datetime.timezone.utc).date() != today:
-                continue
+            ts = parsedate_to_datetime(raw).astimezone(datetime.timezone.utc)
         except (TypeError, ValueError):
+            continue
+        if ts < window_start:
             continue
         if m.get("direction", "").startswith("inbound"):
             inbound += 1
-        else:
-            out += 1
-        if str(m.get("error_code")) == "63038":
+            continue
+        # outbound: separate real sends from failed attempts
+        code = str(m.get("error_code") or "")
+        status = m.get("status", "")
+        if code == "63038":
             limit_hit = True
-    line = f"📊 היום: {inbound} התקבלו · {out} נשלחו (מגבלה: 50)"
-    if limit_hit:
-        line += "\n⚠️ מגבלת 50/יום פעילה (63038) — מתאפס בעוד ~24ש'."
+            failed += 1
+        elif code or status in ("failed", "undelivered"):
+            failed += 1
+        else:
+            sent_ok += 1
+            if oldest_ok is None or ts < oldest_ok:
+                oldest_ok = ts
+
+    line = f"📊 24 שעות אחרונות: {inbound} התקבלו · {sent_ok} נשלחו (מגבלה: 50 בחלון נע)"
+    if failed:
+        line += f" · {failed} נכשלו"
+    if limit_hit or sent_ok >= 50:
+        msg = "\n⚠️ מגבלת 50 בחלון נע של 24ש' פעילה — הקיבולת מתפנה בהדרגה"
+        if oldest_ok is not None and sent_ok >= 50:
+            frees_in_h = ((oldest_ok + datetime.timedelta(hours=24)) - now).total_seconds() / 3600
+            if frees_in_h > 0:
+                msg += f", מקום נוסף מתפנה בעוד ~{frees_in_h:.0f}ש'"
+        line += msg + "."
     return line
 
 

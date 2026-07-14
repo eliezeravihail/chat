@@ -1,16 +1,17 @@
 # chat — בוט WhatsApp חכם בעברית
 
-בוט אישי שמחבר WhatsApp למודלי שפה (HY3 / Claude / GPT / חינמיים). שיחה טבעית
-בעברית, זיכרון, ושאלות על תמונות.
+בוט שמחבר WhatsApp למודלי שפה (HY3 / Claude / GPT / חינמיים): שיחה טבעית
+בעברית, זיכרון שיחה, ושאלות על תמונות. הגישה מוגבלת למספרים מורשים בלבד.
 
-יש **שתי גרסאות** — בחר אחת:
+יש **שתי גרסאות** — בוחרים אחת:
 
 | גרסה | יתרון | חיסרון | מדריך |
 | --- | --- | --- | --- |
-| **1 · Twilio** (רצה עכשיו) | הכי פשוט, רשמי, בלי סיכון חסימה | מגבלת **50 הודעות/יום** (sandbox) | כאן למטה ⬇️ |
-| **2 · Hermes** (מתקדם) | **בלי מגבלת הודעות**, סוכן מלא | דורש מספר WhatsApp ייעודי + טלפון ישן | [HERMES.md](HERMES.md) |
+| **1 · Twilio** | הכי פשוט, רשמי, בלי סיכון חסימה | מגבלת **50 הודעות/יום** (sandbox) | כאן למטה ⬇️ |
+| **2 · Hermes** | **בלי מגבלת הודעות**, סוכן מלא | דורש מספר WhatsApp ייעודי + טלפון ישן | [HERMES.md](HERMES.md) |
 
-שתי הגרסאות רצות על אותו **VM חינמי** של Google Cloud (e2-micro).
+שתי הגרסאות יכולות לרוץ על אותו **VM חינמי** (למשל Google Cloud e2-micro
+או Oracle Cloud Always Free).
 
 ---
 
@@ -20,6 +21,7 @@
 | --- | --- | --- |
 | `core.py` | המוח: מודלים, זיכרון, פקודות, עברית | Twilio |
 | `twilio_poll.py` | הבוט — מושך הודעות מ-Twilio ועונה | Twilio |
+| `monitor-twilio.py` | בדיקת מצב Twilio → התראת ntfy (אופציונלי) | Twilio |
 | `setup-twilio-vm.sh` | הקמת ה-VM בפקודה אחת | Twilio |
 | `.github/workflows/deploy-gcp.yml` | פריסה אוטומטית (ראה [למטה](#מה-ה-github-action-עושה)) | Twilio |
 | `.env.example` | דוגמת הגדרות (להרצה מקומית) | Twilio |
@@ -31,15 +33,16 @@
 
 # גרסה 1 — Twilio
 
-**מה זה:** הבוט הפשוט שלנו (`twilio_poll.py`) שמדבר עם WhatsApp דרך ה-sandbox
-של Twilio, ועם המודלים דרך OpenRouter. **זו הגרסה שרצה אצלך עכשיו.**
+**מה זה:** בוט (`twilio_poll.py`) שמדבר עם WhatsApp דרך ה-sandbox של Twilio,
+ועם המודלים דרך OpenRouter. לא צריך webhook ציבורי — הבוט מושך הודעות בפולינג.
 
-**מגבלה:** ה-sandbox מוגבל ל-50 הודעות/יום. לשימוש כבד — עבור ל[Hermes](HERMES.md).
+**מגבלה:** ה-sandbox מוגבל ל-50 הודעות/יום (חלון נע של 24 שעות). לשימוש כבד —
+עבור ל[Hermes](HERMES.md).
 
-### איך זה רץ בענן (מה שכבר עשית)
+### הקמה בענן
 
-1. **VM:** ‏<https://console.cloud.google.com> → Compute Engine → Create instance
-   → `e2-micro`, region `us-central1`, Ubuntu 24.04.
+1. **VM:** צור מכונה קטנה (למשל `e2-micro` ב-Google Cloud, region
+   `us-central1`, Ubuntu 24.04; או Oracle Cloud Always Free).
 2. **הקמה** — בכפתור **SSH** של ה-VM, פקודה אחת:
    ```bash
    curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/setup-twilio-vm.sh -o setup.sh && bash setup.sh
@@ -48,10 +51,19 @@
 3. **סודות** — ‏GitHub → Settings → Secrets and variables → Actions. הוסף:
    `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY` (מודפסים בסקריפט),
    ו-`OPENROUTER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`,
-   `ALLOWED_WA_ID` (הערכים שלך). אופציונלי: `REDIS_URL`, `DEFAULT_MODEL`.
+   `ALLOWED_WA_ID`. אופציונלי: `REDIS_URL`, `DEFAULT_MODEL`.
+   כמשתנה (Variable, לא סוד) אופציונלי: `NTFY_TOPIC` להתראות.
 4. **הפעל:** ‏GitHub → Actions → **deploy-gcp** → Run workflow.
 
 מכאן — כל שינוי קוד ב-`main` מתפרס לבד (ראה [למטה](#מה-ה-github-action-עושה)).
+
+### הרצה מקומית
+
+```bash
+cp .env.example .env      # מלא את הערכים
+pip install -r requirements.txt
+python twilio_poll.py
+```
 
 ### פקודות (בתוך הצ'אט)
 
@@ -63,7 +75,27 @@
 | `/clear` | ניקוי הזיכרון |
 
 ברירת המחדל `hy3`; אם נכשל — נפילה אוטומטית לחינמיים. שליחת תמונה → ניתוח.
-המודל נבחר **פר-מספר** (השינוי שלך לא משפיע על משתמש אחר).
+המודל נבחר **פר-מספר** (שינוי אצל משתמש אחד לא משפיע על אחר).
+
+### התנהגות מול מגבלת ה-50/יום
+
+כשמזוהה מגבלת ה-sandbox (שגיאה 63038), הבוט **לא מבזבז קריאות LLM בתשלום** על
+תשובות שאי אפשר לשלוח: הוא נכנס ל-cooldown (‏`LIMIT_BACKOFF_MIN`, ברירת מחדל
+15 דק'), דוחה הודעות חדשות בלי לייצר תשובה, **ועונה עליהן אוטומטית כשהקיבולת
+מתפנה**. תשובה שכבר נוצרה ולא נשלחה נשמרת ונשלחת מאוחר יותר — בלי ריצת LLM נוספת.
+
+### הגדרות (משתני סביבה עיקריים)
+
+| משתנה | ברירת מחדל | תפקיד |
+| --- | --- | --- |
+| `OPENROUTER_KEY` | — | מפתח OpenRouter (חובה) |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM` | — | פרטי Twilio (חובה) |
+| `ALLOWED_WA_ID` | — | מספר/ים מורשים, מופרדים בפסיק (חובה) |
+| `DEFAULT_MODEL` | `hy3` | מודל ברירת מחדל (slug או קיצור) |
+| `REDIS_URL` | — | זיכרון מתמשך (Upstash); בלעדיו זיכרון בזיכרון-תהליך |
+| `NTFY_TOPIC` | — | התראות ל-ntfy; ריק = בלי התראות |
+| `HEARTBEAT_HOURS` | `6` | תדירות heartbeat ל-ntfy; 0 = כבוי |
+| `LIMIT_BACKOFF_MIN` | `15` | דקות המתנה אחרי פגיעה במגבלת ה-50 |
 
 ### תפעול ה-VM (SSH)
 
@@ -73,26 +105,27 @@ journalctl -u wa-bot -f           # לוגים חיים
 sudo systemctl restart wa-bot     # הפעלה מחדש
 ```
 
-### ניטור — האם הגעת למגבלת 50/יום? (התראה ל-ntfy)
+### ניטור — התראות ל-ntfy
 
-`monitor-twilio.py` בודק את פעילות Twilio של היום (כמה נשלח, ואילו שגיאות —
-במיוחד `63038` = מגבלת ה-50) ודוחף סיכום ל-**ntfy** — התראה לטלפון שעובדת גם
-כשה-WhatsApp חסום. אפשר לראות בדפדפן ב-`https://ntfy.sh/<topic>` (בלי אפליקציה):
+הבוט שולח **heartbeat** ל-ntfy כל `HEARTBEAT_HOURS` שעות עם מצב Twilio של
+24 השעות האחרונות (התקבלו / נשלחו / נכשלו + מצב המגבלה), וכן התראה בכל פעם
+שהודעה נשלחת ונכשלת. אם ה-heartbeat מפסיק להגיע — הבוט או ה-VM למטה. אפשר
+לראות בדפדפן ב-`https://ntfy.sh/<topic>` (בלי אפליקציה). בחר topic
+לא-ניחוש (הוא מתפקד כסיסמה בערוץ הציבורי).
+
+בנוסף, `monitor-twilio.py` הוא כלי עצמאי שבודק את מצב Twilio ודוחף סיכום
+ל-ntfy — שימושי להרצה מתוזמנת (cron) בנפרד מהבוט:
 
 ```bash
-cd ~/chat
-# בחר topic כלשהו לא-ניחוש (הוא מתפקד כסיסמה בערוץ הציבורי):
-NTFY_TOPIC=eli-bot-7hK2p ./.venv/bin/python monitor-twilio.py
-# כל שעה אוטומטית:
-( crontab -l 2>/dev/null; echo "0 * * * * cd ~/chat && NTFY_TOPIC=eli-bot-7hK2p ./.venv/bin/python monitor-twilio.py" ) | crontab -
+NTFY_TOPIC=<topic> ./.venv/bin/python monitor-twilio.py
 ```
 
 ---
 
 # גרסה 2 — Hermes (בלי מגבלת הודעות)
 
-סוכן מלא של Nous Research על אותו VM, עם מספר WhatsApp ייעודי — **בלי מגבלת
-הודעות, בלי Twilio, בלי פייסבוק.** דורש SIM זול חד-פעמי + טלפון ישן.
+סוכן מלא של Nous Research עם מספר WhatsApp ייעודי — **בלי מגבלת הודעות, בלי
+Twilio, בלי פייסבוק.** דורש SIM זול חד-פעמי + טלפון ישן.
 
 המדריך המלא, כולל סקריפט הקמה בפקודה אחת וגבולות האבטחה: **[HERMES.md](HERMES.md)**.
 
@@ -103,7 +136,7 @@ NTFY_TOPIC=eli-bot-7hK2p ./.venv/bin/python monitor-twilio.py
 הקובץ `.github/workflows/deploy-gcp.yml` הוא **הפריסה האוטומטית**. בכל **push
 ל-`main`** (או הפעלה ידנית ב-Actions → deploy-gcp → Run workflow), הוא:
 
-1. מתחבר ל-VM שלך ב-SSH (לפי הסודות `GCP_VM_HOST/USER/SSH_KEY`).
+1. מתחבר ל-VM ב-SSH (לפי הסודות `GCP_VM_HOST/USER/SSH_KEY`).
 2. מושך את הקוד העדכני (`git pull`).
 3. **כותב את קובץ ה-`.env`** על ה-VM מתוך סודות GitHub (המפתחות **לא** נשמרים
    ידנית על השרת — מקור אמת יחיד).
@@ -121,11 +154,11 @@ NTFY_TOPIC=eli-bot-7hK2p ./.venv/bin/python monitor-twilio.py
 | `hermes` | סוכן Hermes: git pull, restart ל-gateway של Hermes |
 | `off` / `none` | **מכבה את הפריסה האוטומטית** — push לא נוגע ב-VM |
 
-כך אתה שולט מ-GitHub, בלי לגעת בקוד: רוצה להשהות פריסות? שים `off`. עברת ל-
-Hermes? שים `hermes`. (ה-Action מדלג בשקט אם `GCP_VM_HOST` לא הוגדר.)
+כך שולטים מ-GitHub בלי לגעת בקוד: להשהות פריסות — `off`; לעבור ל-Hermes —
+`hermes`. (ה-Action מדלג בשקט אם `GCP_VM_HOST` לא הוגדר.)
 
 ---
 
 ## רישיון
 
-[MIT](LICENSE) © 2026 Eliezer Avihail
+[MIT](LICENSE)

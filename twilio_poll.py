@@ -79,6 +79,12 @@ _blocked_until = 0.0                 # wall-clock; while now < this, sending is 
 _alerted_sids: deque = deque(maxlen=500)  # sids already alerted during an outage (no spam)
 _pending: dict[str, str] = {}        # sid -> already-generated reply awaiting delivery
 
+# Single source of truth for the "you're at the daily limit" alert, so the two
+# code paths that can hit it (an actual failed send, and a message deferred
+# mid-cooldown) say the exact same reassuring thing instead of drifting.
+LIMIT_ALERT = ("⚠️ ניסית לשלוח — מגבלת 50 ההודעות (63038, חלון נע של 24ש') פעילה. "
+               "ההודעה התקבלה — אענה אוטומטית כשהקיבולת תתפנה.")
+
 
 async def notify(client: httpx.AsyncClient, text: str, high: bool = False) -> None:
     """Push an out-of-band alert to ntfy (works even when WhatsApp is blocked)."""
@@ -123,8 +129,7 @@ async def send_text(
         if "63038" in body or "daily messages limit" in body.lower():
             _blocked_until = time.time() + LIMIT_BACKOFF  # pause LLM+sends until this passes
             if alert:
-                await notify(client, "⚠️ ניסית לשלוח — הבוט לא הצליח להשיב: מגבלת 50 ההודעות "
-                                     "(63038, חלון נע של 24ש'). הקיבולת מתפנה בהדרגה.", high=True)
+                await notify(client, LIMIT_ALERT, high=True)
             return "limit"
         if alert:
             await notify(client, f"⚠️ ניסית לשלוח — התשובה נכשלה ({r.status_code}).", high=True)
@@ -174,8 +179,7 @@ async def handle(client: httpx.AsyncClient, msg: dict) -> None:
     if time.time() < _blocked_until:
         if sid not in _alerted_sids:
             _alerted_sids.append(sid)
-            await notify(client, "⚠️ ניסית לשלוח — מגבלת 50 (חלון נע 24ש') פעילה. "
-                                 "אענה אוטומטית כשהקיבולת תתפנה.", high=True)
+            await notify(client, LIMIT_ALERT, high=True)
         return
 
     body = msg.get("body", "") or ""

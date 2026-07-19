@@ -34,11 +34,11 @@ else
   echo "    swap already active — skipping"
 fi
 
-echo "==> 2/6 system packages"
+echo "==> 2/7 system packages"
 sudo apt-get update -qq
-sudo apt-get install -y -qq python3-venv python3-pip curl >/dev/null
+sudo apt-get install -y -qq python3-venv python3-pip curl gocryptfs fuse3 >/dev/null
 
-echo "==> 3/6 hermes-agent (venv at ~/hermes-env)"
+echo "==> 3/7 hermes-agent (venv at ~/hermes-env)"
 if [ ! -d "$HOME/hermes-env" ]; then
   python3 -m venv "$HOME/hermes-env"
 fi
@@ -47,9 +47,45 @@ fi
 grep -q 'hermes-env/bin' "$HOME/.bashrc" || echo 'export PATH="$HOME/hermes-env/bin:$PATH"' >> "$HOME/.bashrc"
 export PATH="$HOME/hermes-env/bin:$PATH"
 
-echo "==> 4/6 hermes config (model, fallbacks, key, whitelist, Hebrew persona)"
+echo "==> 4/7 encrypted data store (gocryptfs)"
+# Hermes always writes conversation transcripts to ~/.hermes/state.db (plaintext
+# by default). We keep ~/.hermes as a gocryptfs mount so the FILES on disk are
+# ciphertext; decryption is lazy, per-file, in memory only while mounted. The
+# key lives in a 0600 file on the VM — this satisfies "no plaintext conversation
+# files at rest", not anti-theft (that would need an off-machine key).
 HH="${HERMES_HOME:-$HOME/.hermes}"
-mkdir -p "$HH"
+KEYFILE="$HOME/.hermes.key"
+CIPHER="$HOME/.hermes.cipher"
+if [ ! -f "$KEYFILE" ]; then
+  if [ -n "${HERMES_MEMORY_KEY:-}" ]; then printf '%s' "$HERMES_MEMORY_KEY" > "$KEYFILE"
+  else openssl rand -base64 32 > "$KEYFILE"; fi
+  chmod 600 "$KEYFILE"
+fi
+# let the hermes service (whatever user it runs as) read the FUSE mount
+grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null || echo 'user_allow_other' | sudo tee -a /etc/fuse.conf >/dev/null
+mkdir -p "$CIPHER" "$HH"
+[ -f "$CIPHER/gocryptfs.conf" ] || gocryptfs -init -passfile "$KEYFILE" "$CIPHER"
+mountpoint -q "$HH" || gocryptfs -allow_other -passfile "$KEYFILE" "$CIPHER" "$HH"
+# auto-mount on boot, before the hermes gateway
+sudo tee /etc/systemd/system/hermes-crypt.service >/dev/null <<UNIT
+[Unit]
+Description=Mount encrypted Hermes store (gocryptfs)
+After=local-fs.target
+Before=hermes-gateway.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=$(whoami)
+ExecStart=/usr/bin/gocryptfs -allow_other -passfile $KEYFILE $CIPHER $HH
+ExecStop=/bin/fusermount -u $HH
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable hermes-crypt >/dev/null 2>&1 || true
+
+echo "==> 5/7 hermes config (model, fallbacks, key, whitelist, Hebrew persona)"
+mkdir -p "$HH"   # now the decrypted (mounted) view
 
 # Primary model + free fallback chain. Edit freely — `hermes fallback list`
 # shows the effective chain. Free slugs rot; replace with any current ones.
@@ -97,10 +133,10 @@ if ! curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/SOUL.
 EOF
 fi
 
-echo "==> 5/6 non-Python deps (node for the WhatsApp bridge, etc.)"
+echo "==> 6/7 non-Python deps (node for the WhatsApp bridge, etc.)"
 hermes postinstall || true
 
-echo "==> 6/6 verify"
+echo "==> 7/7 verify"
 hermes fallback list || true
 echo
 echo "============================================================"
@@ -116,4 +152,7 @@ echo "     sudo env \"PATH=\$PATH\" hermes gateway install --system"
 echo "     sudo env \"PATH=\$PATH\" hermes gateway start --system"
 echo
 echo "שימושי: hermes status | hermes logs | hermes model | hermes fallback list"
+echo
+echo "🔒 הזיכרון מוצפן: ~/.hermes הוא gocryptfs (ciphertext ב-~/.hermes.cipher,"
+echo "   מפתח ב-~/.hermes.key). מותקן אוטומטית באתחול (שירות hermes-crypt)."
 echo "============================================================"

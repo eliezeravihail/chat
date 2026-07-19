@@ -110,8 +110,6 @@ jobs:
             set -e
             cd ~/chat
             git pull --ff-only
-            # Switching to Hermes replaces Twilio — take the Twilio bot down.
-            sudo systemctl disable --now wa-bot 2>/dev/null || true
             # Ensure the encrypted store (~/.hermes) is mounted (survives reboots).
             sudo systemctl start hermes-crypt 2>/dev/null || true
             mountpoint -q ~/.hermes || gocryptfs -allow_other -passfile ~/.hermes.key ~/.hermes.cipher ~/.hermes || true

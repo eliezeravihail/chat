@@ -37,6 +37,54 @@ OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
 REDIS_URL = os.environ.get("REDIS_URL")
 
+# --- at-rest encryption for conversation memory -----------------------
+# Therapy content shouldn't sit in plaintext at the Redis provider (Upstash).
+# If MEMORY_KEY is set, we encrypt the history JSON before storing and decrypt
+# it only inside this process when building the model context. Fernet =
+# AES-128-CBC + HMAC (authenticated). MEMORY_KEY can be any strong secret string
+# (e.g. `openssl rand -base64 32`) — we derive the Fernet key from it.
+MEMORY_KEY = os.environ.get("MEMORY_KEY")
+
+
+def _make_cipher():
+    if not MEMORY_KEY:
+        return None
+    try:
+        import base64
+        import hashlib
+
+        from cryptography.fernet import Fernet
+
+        key = base64.urlsafe_b64encode(hashlib.sha256(MEMORY_KEY.encode()).digest())
+        return Fernet(key)
+    except Exception as exc:  # noqa: BLE001 — never crash the bot over crypto setup
+        print(
+            "WARNING: MEMORY_KEY is set but encryption is unavailable "
+            f"({exc!r}) — memory will be stored UNENCRYPTED. Ensure the "
+            "'cryptography' package is installed (it's in requirements.txt).",
+            flush=True,
+        )
+        return None
+
+
+_cipher = _make_cipher()
+
+
+def _encrypt(text: str) -> str:
+    return _cipher.encrypt(text.encode()).decode() if _cipher else text
+
+
+def _decrypt(text: str) -> str:
+    """Decrypt if we have a cipher; on failure (legacy plaintext or wrong key)
+    return the input as-is so legacy plaintext still parses and a bad token
+    simply fails to json-parse upstream (→ fresh history) instead of crashing."""
+    if not _cipher:
+        return text
+    try:
+        return _cipher.decrypt(text.encode()).decode()
+    except Exception:  # noqa: BLE001 — InvalidToken / non-token legacy value
+        return text
+
 MODEL_ALIASES = {
     "auto": "auto",                                 # best available free model
     "free": "auto",
@@ -238,13 +286,19 @@ class RedisStore:
 
     async def get_history(self, uid: str) -> list[dict]:
         raw = await self._r.get(self._hist_key(uid))
-        return json.loads(raw) if raw else []
+        if not raw:
+            return []
+        try:
+            return json.loads(_decrypt(raw))
+        except (ValueError, TypeError):
+            # Unreadable (wrong MEMORY_KEY / corrupt) — start fresh rather than crash.
+            return []
 
     async def append(self, uid: str, user_msg: dict, assistant_msg: dict) -> None:
         hist = await self.get_history(uid)
         hist.extend([user_msg, assistant_msg])
         hist = hist[-HISTORY_TURNS:]
-        await self._r.set(self._hist_key(uid), json.dumps(hist), ex=HISTORY_TTL)
+        await self._r.set(self._hist_key(uid), _encrypt(json.dumps(hist)), ex=HISTORY_TTL)
 
     async def clear(self, uid: str) -> None:
         await self._r.delete(self._hist_key(uid))

@@ -298,7 +298,12 @@ async def main() -> None:
         # Startup ping to ntfy — confirms the bot is running AND that the ntfy
         # pipe works, independent of WhatsApp (which may be at its daily limit).
         startup = await twilio_status(client)
-        await notify(client, f"🤖 הבוט עלה ורץ (Twilio).\n{startup}")
+        # Warn (on the phone) if memory is non-persistent — every deploy wipes it.
+        mem_warn = "" if core.REDIS_URL else (
+            "\n⚠️ זיכרון לא מתמשך (אין REDIS_URL) — היסטוריית השיחה תימחק בכל "
+            "הפעלה מחדש/פריסה."
+        )
+        await notify(client, f"🤖 הבוט עלה ורץ (Twilio).\n{startup}{mem_warn}")
         asyncio.create_task(heartbeat_loop(client))
         await announce(client)
         while True:

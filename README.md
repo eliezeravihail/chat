@@ -21,7 +21,8 @@
 | --- | --- | --- |
 | `core.py` | המוח: מודלים, זיכרון, פקודות, עברית | משותף |
 | `SOUL.md` | האישיות של הבוט (משה) — מקור אמת יחיד, נטען ע"י `core.py` וע"י Hermes | משותף |
-| `twilio_poll.py` | הבוט — מושך הודעות מ-Twilio ועונה | Twilio |
+| `twilio_poll.py` | ערוץ WhatsApp — מושך הודעות מ-Twilio ועונה | Twilio |
+| `ntfy_channel.py` | ערוץ ntfy דו-כיווני — צ'אט מהדפדפן (מקבל *וגם* שולח) | משותף |
 | `monitor-twilio.py` | בדיקת מצב Twilio → התראת ntfy (אופציונלי) | Twilio |
 | `setup-twilio-vm.sh` | הקמת ה-VM בפקודה אחת | Twilio |
 | `.github/workflows/deploy-gcp.yml` | פריסה אוטומטית (ראה [למטה](#מה-ה-github-action-עושה)) | Twilio |
@@ -29,6 +30,33 @@
 | `requirements.txt` | תלויות Python | Twilio |
 | `hermes/setup-hermes-vm.sh` | הקמת Hermes בפקודה אחת | Hermes |
 | `HERMES.md` | המדריך המלא ל-Hermes | Hermes |
+
+---
+
+## ערוצים (קלט/פלט) — גנרי
+
+הליבה (`core.py`) **ניטרלית לפלטפורמה**: כל ערוץ רק מקבל הודעה, קורא ל-
+`core.respond(uid, text)`, ומעביר את התשובה. כך קל להוסיף ערוצים בלי לגעת בלוגיקה:
+
+| ערוץ | קובץ | הערות |
+| --- | --- | --- |
+| **WhatsApp** (Twilio) | `twilio_poll.py` | מגבלת 50/יום ב-sandbox |
+| **ntfy** (דו-כיווני) | `ntfy_channel.py` | צ'אט מדפדפן, בלי אפליקציה/פייסבוק/מגבלה |
+| **Telegram** | (בעתיד) | אדפטר דק שקורא ל-`core.respond` |
+
+### ערוץ ntfy — צ'אט מהדפדפן (מקבל ושולח)
+
+מדבר עם הבוט דרך topic של ntfy — כותבים בתיבת ההודעה בעמוד, הבוט קורא את הזרם,
+עונה, ומפרסם את התשובה חזרה לאותו topic (הוא מדלג על ההודעות של עצמו). בלי
+אפליקציה, בלי WhatsApp, בלי מגבלת 50/יום.
+
+```bash
+# בחר topic לא-ניחוש (הוא הסיסמה — כל מי שיודע אותו יכול לדבר עם הבוט):
+NTFY_CHAT_TOPIC=moshe-9f3kd21x ./.venv/bin/python ntfy_channel.py
+```
+פתח בדפדפן `https://ntfy.sh/moshe-9f3kd21x` וכתוב בתיבה. (להפעלה קבועה — שירות
+systemd משלו, כמו `wa-bot`.) ⚠️ שם ה-topic הוא הסוד היחיד; בחר משהו ארוך ואקראי,
+או הרם שרת ntfy עצמאי. ל-ntfy.sh יש מגבלות קצב לשימוש חינמי.
 
 ---
 

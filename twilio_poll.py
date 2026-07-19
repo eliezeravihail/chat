@@ -186,14 +186,9 @@ async def handle(client: httpx.AsyncClient, msg: dict) -> None:
     image = None
     if int(msg.get("num_media", "0") or 0) > 0:
         image = await fetch_image(client, sid)
-    try:
-        # uid = sender, so each allowed number keeps its own history and model.
-        if image:
-            reply = await core.ask_llm(sender, body or "מה רואים בתמונה?", image_data_uri=image)
-        else:
-            reply = await core.handle_command(sender, body) or await core.ask_llm(sender, body)
-    except Exception as exc:  # noqa: BLE001
-        reply = f"⚠️ שגיאה: {exc!r}"
+    # uid = sender, so each allowed number keeps its own history and model.
+    # core.respond() is the channel-neutral seam (same call every adapter uses).
+    reply = await core.respond(sender, body, image_data_uri=image)
 
     status = await send_text(client, sender, reply)
     if status == "limit":

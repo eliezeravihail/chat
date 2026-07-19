@@ -561,3 +561,17 @@ async def handle_command(uid: str, text: str) -> str | None:
         await store.clear(uid)
         return f"✅ הוחלף ל־{model} (ההקשר אופס)."
     return "פקודה לא מוכרת. נסה /models, /model <שם>, /credits, /clear"
+
+
+# --- channel-neutral entry point ---------------------------------------
+async def respond(uid: str, text: str, image_data_uri: str | None = None) -> str:
+    """Turn one incoming user message into a reply. This is the single seam every
+    channel adapter (WhatsApp/Twilio, ntfy, Telegram, …) calls — the channel only
+    has to receive a message, call this, and deliver the returned text. `uid`
+    identifies the conversation (its own memory + model choice)."""
+    try:
+        if image_data_uri:
+            return await ask_llm(uid, text or "מה רואים בתמונה?", image_data_uri=image_data_uri)
+        return await handle_command(uid, text) or await ask_llm(uid, text)
+    except Exception as exc:  # noqa: BLE001 — never let one bad turn crash the channel
+        return f"⚠️ שגיאה: {exc!r}"

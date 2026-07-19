@@ -98,6 +98,23 @@ python twilio_poll.py
 | `HEARTBEAT_HOURS` | `6` | תדירות heartbeat ל-ntfy; 0 = כבוי |
 | `LIMIT_BACKOFF_MIN` | `15` | דקות המתנה אחרי פגיעה במגבלת ה-50 |
 
+### זיכרון מתמשך (Redis) — מומלץ בחום
+
+בלי `REDIS_URL` הזיכרון חי בזיכרון-התהליך, ו**כל פריסה אוטומטית (push ל-`main`)
+מוחקת את היסטוריית השיחה** — המשתמש "מתחיל מאפס" בכל עדכון. עם Redis הזיכרון
+שורד. Upstash נותן Redis חינמי לגמרי לגודל הזה:
+
+1. היכנס ל-<https://upstash.com> → הירשם (חינם) → **Create Database** (סוג Redis,
+   אזור קרוב).
+2. בעמוד ה-DB, העתק את מחרוזת החיבור מסוג **Redis** (מתחילה ב-`rediss://…`,
+   כוללת סיסמה) — לא את ה-REST.
+3. ‏GitHub → Settings → Secrets and variables → Actions → הוסף secret בשם
+   **`REDIS_URL`** עם הערך שהעתקת.
+4. עשה push כלשהו (או Actions → deploy-gcp → Run) — ה-Action כותב את `REDIS_URL`
+   ל-`.env` וה-בוט יעבור ל-Redis. בלוגים תראה `state backend: RedisStore`.
+
+(אם `REDIS_URL` חסר, הבוט מדפיס אזהרה בהפעלה וגם שולח התראת ntfy על כך.)
+
 ### תפעול ה-VM (SSH)
 
 ```bash

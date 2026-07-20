@@ -37,10 +37,17 @@ jobs:
       - name: Deploy Hermes agent
         if: steps.gate.outputs.run == 'true'
         uses: appleboy/ssh-action@v1
+        env:
+          # Managed from GitHub → Settings → Secrets → WHATSAPP_ALLOWED_USERS
+          # (comma-separated digits+country code, no '+'). Kept as a Secret so the
+          # phone numbers never live in this public repo. Empty = leave the VM's
+          # current allowlist untouched.
+          WA_ALLOWED: ${{ secrets.WHATSAPP_ALLOWED_USERS }}
         with:
           host: ${{ secrets.GCP_VM_HOST }}
           username: ${{ secrets.GCP_VM_USER }}
           key: ${{ secrets.GCP_VM_SSH_KEY }}
+          envs: WA_ALLOWED
           script: |
             set -e
             cd ~/chat
@@ -50,6 +57,16 @@ jobs:
             mountpoint -q ~/.hermes || gocryptfs -allow_other -passfile ~/.hermes.key ~/.hermes.cipher ~/.hermes || true
             # Refresh the persona from the repo into the (encrypted) store.
             curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/SOUL.md -o ~/.hermes/SOUL.md || true
+            # Sync the WhatsApp allowlist from the GitHub secret, if provided, so
+            # "who the bot answers" is managed from GitHub instead of over SSH.
+            if [ -n "${WA_ALLOWED}" ]; then
+              touch ~/.hermes/.env && chmod 600 ~/.hermes/.env
+              if grep -q '^WHATSAPP_ALLOWED_USERS=' ~/.hermes/.env; then
+                sed -i "s|^WHATSAPP_ALLOWED_USERS=.*|WHATSAPP_ALLOWED_USERS=${WA_ALLOWED}|" ~/.hermes/.env
+              else
+                echo "WHATSAPP_ALLOWED_USERS=${WA_ALLOWED}" >> ~/.hermes/.env
+              fi
+            fi
             # Restart the Hermes gateway. The official installer puts `hermes` on
             # PATH (~/.local/bin) and the gateway runs as a *user* service, so a
             # non-login SSH session needs XDG_RUNTIME_DIR + linger to reach it.

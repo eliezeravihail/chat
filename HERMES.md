@@ -1,6 +1,6 @@
 # Hermes Agent בענן חינמי — המסלול המומלץ
 
-מחליף את בוט ה-Twilio (שמוגבל ל-50 הודעות/יום ב-sandbox): סוכן מלא של
+בוט WhatsApp פרטי מבוסס סוכן מלא של
 [Nous Research](https://github.com/nousresearch/hermes-agent) עם זיכרון מתמשך,
 כלים, ו-WhatsApp מובנה — **בלי מגבלת הודעות**. העלות היחידה: טוקנים ב-OpenRouter.
 
@@ -134,13 +134,13 @@ sudo env "PATH=$PATH" hermes gateway start --system
 
 ## עדכון אוטומטי (CI)
 
-`.github/workflows/deploy-gcp.yml` מריץ deploy בכל push ל-main. הוא כבר
-מחובר ל-VM — אבל כדי שיעדכן את **Hermes** (ולא ינסה לפרוס מחדש את בוט ה-Twilio
-הישן וייכשל), חובה להגדיר ב-GitHub → Settings → Secrets and variables →
-Actions → Variables:
+`.github/workflows/deploy-gcp.yml` מריץ deploy בכל push ל-main. כל שנדרש הוא
+הסודות ב-GitHub → Settings → Secrets and variables → Actions → Secrets:
 
-- `DEPLOY_TARGET = hermes`  ← המתג המרכזי
-- וסודות: `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY` (אם עוד לא).
+- `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY`.
+- אופציונלי (Variable): `DEPLOY_TARGET=off` להשהיית הפריסה. ברירת המחדל היא
+  `hermes`, אז אין צורך להגדירו כדי שהפריסה תעבוד.
 
 אז כל push מושך את הריפו, מרענן את `~/.hermes/SOUL.md` ומריץ מחדש את ה-gateway
-(שירות-משתמש, `systemctl --user`) — אוטומטית, בלי לגעת ידנית.
+(שירות-משתמש, `systemctl --user`) — אוטומטית, בלי לגעת ידנית. (מדלג בשקט אם
+`GCP_VM_HOST` לא הוגדר.)

@@ -93,12 +93,13 @@ sudo env "PATH=$PATH" hermes gateway start --system
 
 1. **מי מדבר איתו:** רק מספרים ב-`WHATSAPP_ALLOWED_USERS` (‏`~/.hermes/.env`).
    כל השאר נדחים. שכבה שנייה: `hermes pairing` (אישור ידני).
-2. **אילו כלים יש לו:** ערוץ ה-WhatsApp (של החבר) מקבל **אפס כלים** —
-   `platform_toolsets.whatsapp: []` — שיחה עם מודל השפה בלבד (אומת: 0 סכימות
-   כלים). ה-CLI שלך ב-SSH שומר סט בטוח (חיפוש, תמונות, זיכרון, תזכורות וכו').
-   **מושבת בכל מקרה:** `terminal` (שורת פקודה על השרת!), `file` (קריאת קבצים —
-   כולל `.env` עם המפתח!), `code_execution`, `browser`, `computer_use`.
-   ברירת המחדל של Hermes ‏(`hermes-cli`) כוללת את כולם — אל תחזיר אותה.
+2. **אילו כלים יש לו:** בערוץ ה-WhatsApp מופעל סט מצומצם בלבד (זיכרון והקשר
+   להמשכיות). כלים כבדים/מיותרים כבויים גלובלית דרך `agent.disabled_toolsets`
+   (‏`browser` — כבד על 1GB, `spotify` — דורש מפתחות, `web`), ופקודות-הסקיל
+   המובנות (~69, כמו `/claude-code`, `/arxiv`) כבויות ב-`hermes skills opt-out
+   --remove` (ראה "כוונון" למטה). **תמיד מושבתים:** `terminal` (שורת פקודה על
+   השרת!), `file` (קריאת קבצים — כולל `.env` עם המפתח!), `code_execution`,
+   `computer_use` — אל תפעיל אותם.
 3. **גבולות תוכן:** ‏SOUL.md מנחה את המודל לא לנהל שיחות ארוטיות/מיניות —
    לסרב בנימוס ולהציע נושא אחר.
 4. **סודות:** המפתח ב-`~/.hermes/.env` ‏(chmod 600). כל עוד `terminal`/`file`
@@ -108,3 +109,38 @@ sudo env "PATH=$PATH" hermes gateway start --system
 
 להחזרת כלי למתקדמים: הוסף את שמו ל-`toolsets` ב-`config.yaml` והפעל מחדש את
 ה-gateway. רשימת הכלים המלאה: `hermes tools` (בטרמינל אינטראקטיבי).
+
+## כוונון: מהירות, כלים וסקילים
+
+- **מהירות:** HY3 עם "חשיבה" (reasoning) פעילה איטי מיותר לשיחת תמיכה. לכיבוי,
+  הוסף ל-`~/.hermes/config.yaml`:
+  ```yaml
+  agent:
+    reasoning_effort: "none"      # none|minimal|low|medium|high|... (ברירת מחדל: medium)
+    disabled_toolsets: [browser, spotify, web]
+  ```
+  (חלופה מהצ'אט, מהמספר שלך: `/reasoning none --global`.) `disabled_toolsets`
+  מוריד כלי גם אם ערוץ עדיין מפרט אותו.
+- **סקילים (פקודות `/`):** ההתקנה הרשמית מפעילה ~69 פקודות-סקיל שנחשפות למשתמש
+  ושוברות את האישיות. לכיבוי מלא:
+  ```bash
+  hermes skills opt-out --remove   # --remove מוחק גם קיימים; בלעדיו רק עוצר עתידיים
+  systemctl --user restart hermes-gateway
+  ```
+- **פקודות מובנות:** `/new`, `/help`, `/retry` נתפסות ע"י Hermes *לפני* המודל
+  ואי אפשר להסתירן דרך SOUL. **`/new`** (או `/reset`) מאפס את השיחה — ה-`/clear`
+  הישן של Twilio *אינו* קיים ב-Hermes. איפוס כזה גם מנקה זהות ישנה שנתקעה
+  בזיכרון השיחה (אם הבוט "נתקע" על שם קודם — `/new` פותר).
+
+## עדכון אוטומטי (CI)
+
+`.github/workflows/deploy-gcp.yml` מריץ deploy בכל push ל-main. הוא כבר
+מחובר ל-VM — אבל כדי שיעדכן את **Hermes** (ולא ינסה לפרוס מחדש את בוט ה-Twilio
+הישן וייכשל), חובה להגדיר ב-GitHub → Settings → Secrets and variables →
+Actions → Variables:
+
+- `DEPLOY_TARGET = hermes`  ← המתג המרכזי
+- וסודות: `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY` (אם עוד לא).
+
+אז כל push מושך את הריפו, מרענן את `~/.hermes/SOUL.md` ומריץ מחדש את ה-gateway
+(שירות-משתמש, `systemctl --user`) — אוטומטית, בלי לגעת ידנית.

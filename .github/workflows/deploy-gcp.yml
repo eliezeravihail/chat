@@ -84,7 +84,7 @@ jobs:
             # Optional ntfy chat channel — runs as its own service iff NTFY_CHAT_TOPIC is set.
             if [ -n "${NTFY_CHAT_TOPIC}" ]; then
               printf '%s\n' \
-                '[Unit]' 'Description=ntfy chat channel (Moshe)' 'After=network-online.target' \
+                '[Unit]' 'Description=ntfy chat channel (Aharon)' 'After=network-online.target' \
                 '[Service]' 'Type=simple' "User=$(whoami)" "WorkingDirectory=$HOME/chat" \
                 'Environment=PYTHONUNBUFFERED=1' \
                 "ExecStart=$HOME/chat/.venv/bin/python ntfy_channel.py" \
@@ -115,7 +115,15 @@ jobs:
             mountpoint -q ~/.hermes || gocryptfs -allow_other -passfile ~/.hermes.key ~/.hermes.cipher ~/.hermes || true
             # Refresh the persona from the repo into the (encrypted) store.
             curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/SOUL.md -o ~/.hermes/SOUL.md || true
-            # Restart the Hermes gateway (other config/secrets live in ~/.hermes,
-            # set up once by hermes/setup-hermes-vm.sh — not written from here).
-            ~/hermes-env/bin/hermes gateway restart || sudo systemctl restart hermes-gateway || true
+            # Restart the Hermes gateway. The official installer puts `hermes` on
+            # PATH (~/.local/bin) and the gateway runs as a *user* service, so a
+            # non-login SSH session needs XDG_RUNTIME_DIR + linger to reach it.
+            # Config/secrets live in ~/.hermes (set up once by hand) — not here.
+            export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+            sudo loginctl enable-linger "$(whoami)" 2>/dev/null || true
+            systemctl --user restart hermes-gateway 2>/dev/null \
+              || hermes gateway restart 2>/dev/null \
+              || sudo systemctl restart hermes-gateway 2>/dev/null \
+              || true
             echo "hermes restarted"

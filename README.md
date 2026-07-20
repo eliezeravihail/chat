@@ -20,7 +20,7 @@
 | קובץ | תפקיד | שייך ל |
 | --- | --- | --- |
 | `core.py` | המוח: מודלים, זיכרון, פקודות, עברית | משותף |
-| `SOUL.md` | האישיות של הבוט (משה) — מקור אמת יחיד, נטען ע"י `core.py` וע"י Hermes | משותף |
+| `SOUL.md` | האישיות של הבוט (אהרון) — מקור אמת יחיד, נטען ע"י `core.py` וע"י Hermes | משותף |
 | `twilio_poll.py` | ערוץ WhatsApp — מושך הודעות מ-Twilio ועונה | Twilio |
 | `ntfy_channel.py` | ערוץ ntfy דו-כיווני — צ'אט מהדפדפן (מקבל *וגם* שולח) | משותף |
 | `monitor-twilio.py` | בדיקת מצב Twilio → התראת ntfy (אופציונלי) | Twilio |
@@ -52,11 +52,11 @@
 
 **הפעלה בענן (אוטומטית):** הוסף secret ב-GitHub בשם **`NTFY_CHAT_TOPIC`** עם שם
 topic לא-ניחוש, ועשה push — ה-Action מקים שירות systemd משלו (`ntfy-bot`) שרץ
-לצד `wa-bot`. פתח בדפדפן `https://ntfy.sh/<אותו topic>` וכתוב בתיבה; משה עונה שם.
+לצד `wa-bot`. פתח בדפדפן `https://ntfy.sh/<אותו topic>` וכתוב בתיבה; אהרון עונה שם.
 
 **הרצה מקומית:**
 ```bash
-NTFY_CHAT_TOPIC=moshe-9f3kd21x ./.venv/bin/python ntfy_channel.py
+NTFY_CHAT_TOPIC=aharon-9f3kd21x ./.venv/bin/python ntfy_channel.py
 ```
 
 ⚠️ **חשוב:** ה-topic של הצ'אט חייב להיות **שונה** מ-`NTFY_TOPIC` של הניטור —

@@ -13,7 +13,7 @@ seam the Twilio adapter uses. Adding Telegram later is the same shape.
 
 Security: the topic name is the ONLY secret — anyone who knows it can chat (and
 spend your OpenRouter credit). Pick an unguessable name (treat it like a
-password), e.g. ``moshe-9f3kd21x``. For stronger isolation, self-host ntfy.
+password), e.g. ``aharon-9f3kd21x``. For stronger isolation, self-host ntfy.
 
 Env (.env, loaded automatically via core):
   OPENROUTER_KEY      required (read by core)
@@ -40,12 +40,12 @@ import core  # loads .env, exposes respond() / split_chunks
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_CHAT_TOPIC = os.environ.get("NTFY_CHAT_TOPIC") or os.environ.get("NTFY_TOPIC", "")
 NTFY_UID = os.environ.get("NTFY_UID", "ntfy")
-NTFY_GREETING = os.environ.get("NTFY_GREETING", "משה מחובר ומקשיב 🌿")
+NTFY_GREETING = os.environ.get("NTFY_GREETING", "אהרון מחובר ומקשיב 🌿")
 
 # ntfy HTTP headers must be ASCII, so this marker title is ASCII. The bot tags
 # every reply with it and skips any incoming stream message that carries it —
 # that's how it avoids answering its own messages on the shared topic.
-BOT_TITLE = "Moshe"
+BOT_TITLE = "Aharon"
 
 if not NTFY_CHAT_TOPIC:
     raise SystemExit(

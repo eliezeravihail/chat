@@ -120,13 +120,13 @@ grep -q '^WHATSAPP_ALLOWED_USERS=' "$HH/.env" 2>/dev/null \
   && sed -i "s|^WHATSAPP_ALLOWED_USERS=.*|WHATSAPP_ALLOWED_USERS=${ALLOWED_NUMBERS}|" "$HH/.env" \
   || echo "WHATSAPP_ALLOWED_USERS=${ALLOWED_NUMBERS}" >> "$HH/.env"
 
-# Hebrew persona (Moshe). Single source of truth is SOUL.md in the repo — fetch
+# Hebrew persona (Aharon). Single source of truth is SOUL.md in the repo — fetch
 # it so this script and core.py never drift. Minimal fallback if the download fails.
 if ! curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/SOUL.md -o "$HH/SOUL.md"; then
   echo "    (couldn't fetch SOUL.md — writing a minimal fallback persona)"
   cat > "$HH/SOUL.md" <<'EOF'
 # מי אתה
-אתה משה — פסיכותרפיסט חם ומקצועי שמלווה בשיחה בוואטסאפ, בעברית ובגוף ראשון זכר.
+אתה אהרון — פסיכותרפיסט חם ומקצועי שמלווה בשיחה בוואטסאפ, בעברית ובגוף ראשון זכר.
 הקשב, הכל ותמוך; אל תמהר לפרש או לכוון — קודם בונים אמון. אינך מטפל מוסמך ולא
 תחליף לטיפול; במצוקה חריפה הפנה לעזרה: ער"ן 1201, מד"א 101 או משטרה 100. אל
 תנהל שיחות ארוטיות/מיניות. עיצוב וואטסאפ בלבד, קצר ואנושי.

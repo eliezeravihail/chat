@@ -1,16 +1,11 @@
 name: deploy-gcp
 
-# Auto-deploy to the GCP VM on push to main. WHAT gets deployed is chosen by a
-# repository *Variable* (not a secret) named DEPLOY_TARGET:
-#   twilio  (default) → the Twilio polling bot: pull, write .env from secrets,
-#                       restart the wa-bot service.
-#   hermes            → the Hermes agent: pull the repo, restart the hermes
-#                       gateway service.
-#   off / none        → skip auto-deploy entirely (push code without touching
-#                       the VM).
-# Set it at: GitHub → Settings → Secrets and variables → Actions → Variables
-#            → New repository variable → DEPLOY_TARGET = twilio | hermes | off
-# Skips cleanly until GCP_VM_HOST is set.
+# Auto-deploy the Hermes agent to the GCP VM on push to main: refresh SOUL.md
+# into the (encrypted) ~/.hermes store and restart the user gateway service.
+# Skips cleanly until GCP_VM_HOST is set, and can be paused with a repo Variable.
+#   GitHub → Settings → Secrets and variables → Actions
+#     Secrets:  GCP_VM_HOST, GCP_VM_USER, GCP_VM_SSH_KEY
+#     Variable: DEPLOY_TARGET = hermes (default) | off  (off/none disables deploy)
 
 on:
   push:
@@ -21,14 +16,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Decide target
+      - name: Decide whether to run
         id: gate
         env:
           HOST: ${{ secrets.GCP_VM_HOST }}
           TARGET: ${{ vars.DEPLOY_TARGET }}
         run: |
-          TARGET="${TARGET:-twilio}"          # default when the variable is unset
-          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          TARGET="${TARGET:-hermes}"          # default: deploy Hermes
           if [ -z "$HOST" ]; then
             echo "GCP_VM_HOST not set — skipping."
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -36,71 +30,12 @@ jobs:
             echo "DEPLOY_TARGET=$TARGET — auto-deploy disabled."
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Deploying target: $TARGET"
+            echo "Deploying Hermes."
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # --- Twilio bot ---------------------------------------------------
-      - name: Deploy Twilio bot
-        if: steps.gate.outputs.run == 'true' && steps.gate.outputs.target == 'twilio'
-        uses: appleboy/ssh-action@v1
-        env:
-          OPENROUTER_KEY: ${{ secrets.OPENROUTER }}
-          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
-          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-          TWILIO_FROM: ${{ secrets.TWILIO_FROM }}
-          ALLOWED_WA_ID: ${{ secrets.ALLOWED_WA_ID }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          MEMORY_KEY: ${{ secrets.MEMORY_KEY }}
-          DEFAULT_MODEL: ${{ secrets.DEFAULT_MODEL }}
-          NTFY_TOPIC: ${{ vars.NTFY_TOPIC }}
-          NTFY_CHAT_TOPIC: ${{ secrets.NTFY_CHAT_TOPIC }}
-        with:
-          host: ${{ secrets.GCP_VM_HOST }}
-          username: ${{ secrets.GCP_VM_USER }}
-          key: ${{ secrets.GCP_VM_SSH_KEY }}
-          envs: OPENROUTER_KEY,TWILIO_ACCOUNT_SID,TWILIO_AUTH_TOKEN,TWILIO_FROM,ALLOWED_WA_ID,REDIS_URL,MEMORY_KEY,DEFAULT_MODEL,NTFY_TOPIC,NTFY_CHAT_TOPIC
-          script: |
-            set -e
-            cd ~/chat
-            git pull --ff-only
-            umask 177
-            cat > .env <<ENV
-            OPENROUTER_KEY=${OPENROUTER_KEY}
-            TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
-            TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
-            TWILIO_FROM=${TWILIO_FROM:-whatsapp:+14155238886}
-            ALLOWED_WA_ID=${ALLOWED_WA_ID}
-            ENV
-            [ -n "${REDIS_URL}" ]     && echo "REDIS_URL=${REDIS_URL}"         >> .env || true
-            [ -n "${MEMORY_KEY}" ]    && echo "MEMORY_KEY=${MEMORY_KEY}"       >> .env || true
-            [ -n "${DEFAULT_MODEL}" ] && echo "DEFAULT_MODEL=${DEFAULT_MODEL}" >> .env || true
-            [ -n "${NTFY_TOPIC}" ]    && echo "NTFY_TOPIC=${NTFY_TOPIC}"       >> .env || true
-            [ -n "${NTFY_CHAT_TOPIC}" ] && echo "NTFY_CHAT_TOPIC=${NTFY_CHAT_TOPIC}" >> .env || true
-            ./.venv/bin/pip install -q -r requirements.txt
-            sudo systemctl restart wa-bot
-            sleep 2
-            systemctl is-active wa-bot
-            # Optional ntfy chat channel — runs as its own service iff NTFY_CHAT_TOPIC is set.
-            if [ -n "${NTFY_CHAT_TOPIC}" ]; then
-              printf '%s\n' \
-                '[Unit]' 'Description=ntfy chat channel (Aharon)' 'After=network-online.target' \
-                '[Service]' 'Type=simple' "User=$(whoami)" "WorkingDirectory=$HOME/chat" \
-                'Environment=PYTHONUNBUFFERED=1' \
-                "ExecStart=$HOME/chat/.venv/bin/python ntfy_channel.py" \
-                'Restart=always' 'RestartSec=5' \
-                '[Install]' 'WantedBy=multi-user.target' \
-                | sudo tee /etc/systemd/system/ntfy-bot.service >/dev/null
-              sudo systemctl daemon-reload
-              sudo systemctl enable ntfy-bot >/dev/null 2>&1 || true
-              sudo systemctl restart ntfy-bot
-              sleep 2
-              systemctl is-active ntfy-bot || true
-            fi
-
-      # --- Hermes agent -------------------------------------------------
       - name: Deploy Hermes agent
-        if: steps.gate.outputs.run == 'true' && steps.gate.outputs.target == 'hermes'
+        if: steps.gate.outputs.run == 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.GCP_VM_HOST }}
@@ -118,7 +53,6 @@ jobs:
             # Restart the Hermes gateway. The official installer puts `hermes` on
             # PATH (~/.local/bin) and the gateway runs as a *user* service, so a
             # non-login SSH session needs XDG_RUNTIME_DIR + linger to reach it.
-            # Config/secrets live in ~/.hermes (set up once by hand) — not here.
             export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
             export XDG_RUNTIME_DIR="/run/user/$(id -u)"
             sudo loginctl enable-linger "$(whoami)" 2>/dev/null || true

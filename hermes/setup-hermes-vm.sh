@@ -121,7 +121,7 @@ grep -q '^WHATSAPP_ALLOWED_USERS=' "$HH/.env" 2>/dev/null \
   || echo "WHATSAPP_ALLOWED_USERS=${ALLOWED_NUMBERS}" >> "$HH/.env"
 
 # Hebrew persona (Aharon). Single source of truth is SOUL.md in the repo — fetch
-# it so this script and core.py never drift. Minimal fallback if the download fails.
+# it so the deployed persona never drifts. Minimal fallback if the download fails.
 if ! curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/SOUL.md -o "$HH/SOUL.md"; then
   echo "    (couldn't fetch SOUL.md — writing a minimal fallback persona)"
   cat > "$HH/SOUL.md" <<'EOF'

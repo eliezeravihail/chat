@@ -1,9 +1,0 @@
-One-shot sentinel: while this file exists in the repo, the deploy workflow
-archives ~/.hermes/state.db on the VM (moves it to state.db.wiped.<timestamp>)
-so ALL users' conversation memory resets to empty on the next deploy.
-
-This is a gross reset for every user, not a targeted delete. The old store is
-moved, not physically deleted, so it remains recoverable on the VM.
-
-Remove this file (in a follow-up commit) once the wipe has run, otherwise every
-future deploy will archive the freshly-created store again.

@@ -90,15 +90,25 @@ jobs:
             else
               echo 'thread_sessions_per_user: false' >> "$CFG"
             fi
-            # One-time, opt-in upgrade (Variable HERMES_UPGRADE=1). Only run when
-            # explicitly asked — auto-upgrading every push risks version drift on a
-            # working bot. Best-effort across the possible install layouts.
+            # Log the installed version every deploy (visible in the Actions run
+            # log) — WhatsApp DM sessions are keyed per phone number only in
+            # recent builds; an old build collapses all DMs into one shared
+            # session (the cross-user memory leak).
+            export PATH="$HOME/.local/bin:$HOME/bin:$HOME/hermes-env/bin:$PATH"
+            echo "hermes version (before): $(hermes --version 2>/dev/null || echo unknown)"
+            # One-time, opt-in upgrade (Variable HERMES_UPGRADE=1). This is the fix
+            # for the DM memory leak: a current Hermes isolates DM memory per
+            # sender automatically. Gated so a working bot isn't churned on every
+            # push (version drift). Best-effort across possible install layouts.
             if [ "${HERMES_UPGRADE}" = "1" ]; then
               echo "HERMES_UPGRADE=1 — upgrading hermes-agent (best effort)"
-              "$HOME/hermes-env/bin/pip" install -q --upgrade hermes-agent 2>/dev/null \
+              hermes self update 2>/dev/null \
+                || hermes self-update 2>/dev/null \
+                || "$HOME/hermes-env/bin/pip" install -q --upgrade hermes-agent 2>/dev/null \
                 || pipx upgrade hermes-agent 2>/dev/null \
                 || pip install --user -q --upgrade hermes-agent 2>/dev/null \
                 || true
+              echo "hermes version (after):  $(hermes --version 2>/dev/null || echo unknown)"
             fi
             # Restart the Hermes gateway. The official installer puts `hermes` on
             # PATH (~/.local/bin) and the gateway runs as a *user* service, so a

@@ -103,16 +103,31 @@ sudo env "PATH=$PATH" hermes gateway start --system
 ```yaml
 group_sessions_per_user: true    # בידוד פר-משתמש בקבוצות (ברירת מחדל)
 thread_sessions_per_user: false
+agent:
+  disabled_toolsets: [session_search, memory, browser, spotify, web]
 ```
 
-> ⚠️ **ערבוב מידע בצ'אט פרטי (DM) = גרסה ישנה.** בידוד ה-DM לפי מספר טלפון קורה
-> אוטומטית **בקוד** (אין דגל קונפיג לזה) — אבל רק בגרסאות עדכניות. גרסה קדומה
-> מקריסה את כל ה-DMs לסשן משותף אחד, ואז מידע זולג בין משתמשים. **התיקון: לעדכן
-> את Hermes** — הדליקו את המשתנה `HERMES_UPGRADE=1` (ראה "עדכון אוטומטי"), עשו
-> deploy אחד (הלוג מראה `hermes version before/after`), והחזירו את המשתנה לריק.
-> אחר כך **שלחו `/new` משני הטלפונים** — העדכון מבודד מכאן והלאה, אבל התמליל
-> שכבר התערבב ב-`state.db` מתנקה רק באיפוס. (ערבוב **בקבוצה** דווקא נשלט בדגל
-> `group_sessions_per_user` שלמעלה.)
+**⚠️ הכלי שעוקף את הבידוד — `session_search` / `memory`.** ל-Hermes יש כלי
+שמחפש/משחזר שיחות עבר (`session_search`) וכלי זיכרון-פרופיל (`memory`). **אין
+בהם שום סינון לפי משתמש** — הם קוראים ישירות מ-`state.db` וסורקים את **כל**
+הסשנים (אפילו חוצה-פרופילים). כלומר, גם אם הבידוד תקין לגמרי, המודל יכול להריץ
+`session_search` ולמשוך את השיחה של החבר ("מה אתה יודע עליי" → מידע של מישהו
+אחר). **על בוט רב-משתמשים חובה לכבות אותם.** לכן הם נמצאים ב-`disabled_toolsets`
+(denylist גלובלי שמנצח כל allowlist), וה-CI אוכף זאת בכל deploy דרך
+`hermes/ensure-private-config.py`. הכיבוי **לא** פוגע ברצף השיחה — התמליל השוטף
+הוא חלק מהסשן, לא מכלי ה-`memory`.
+
+> ⚠️ **אם ראית ערבוב מידע בצ'אט פרטי (DM)** — שני חשודים:
+> 1. **הכלי `session_search`/`memory` היה פעיל** (הכי סביר, לפי ההתנהגות) →
+>    מכובה עכשיו אוטומטית ב-`disabled_toolsets`.
+> 2. **גרסה ישנה** שמקריסה DMs לסשן משותף → הדליקו `HERMES_UPGRADE=1` (ראה
+>    "עדכון אוטומטי"), deploy אחד, ואז לריק.
+>
+> בשני המקרים הכיבוי/העדכון עוצר **מכאן והלאה** אבל **לא מנקה** מה שכבר נשמר
+> ב-`state.db`. לניקוי: **`/new` משני הטלפונים** (מפסיק שימוש בהיסטוריה), או
+> **מחיקה גורפת** — הדליקו `HERMES_WIPE_MEMORY=1` (ראה "עדכון אוטומטי"), deploy
+> אחד, והחזירו לריק. זה מאפס את הזיכרון של **כל** המשתמשים (הקובץ נשמר בגיבוי
+> `state.db.wiped.*` על ה-VM, לא נמחק פיזית).
 
 ## גבולות אבטחה — מה הבוט יכול ומה לא
 
@@ -120,9 +135,10 @@ thread_sessions_per_user: false
 
 1. **מי מדבר איתו:** רק מספרים ב-`WHATSAPP_ALLOWED_USERS` (‏`~/.hermes/.env`).
    כל השאר נדחים. שכבה שנייה: `hermes pairing` (אישור ידני).
-2. **אילו כלים יש לו:** בערוץ ה-WhatsApp מופעל סט מצומצם בלבד (זיכרון והקשר
-   להמשכיות). כלים כבדים/מיותרים כבויים גלובלית דרך `agent.disabled_toolsets`
-   (‏`browser` — כבד על 1GB, `spotify` — דורש מפתחות, `web`), ופקודות-הסקיל
+2. **אילו כלים יש לו:** רצף השיחה (התמליל) הוא חלק מהסשן — לא כלי — אז הוא נשאר.
+   כלים כבויים גלובלית דרך `agent.disabled_toolsets`: **`session_search` ו-`memory`
+   (קריטי לפרטיות — קוראים על פני כל המשתמשים; ראה "בידוד זיכרון בין משתמשים")**,
+   ‏`browser` (כבד על 1GB), `spotify` (דורש מפתחות), `web`. ופקודות-הסקיל
    המובנות (~69, כמו `/claude-code`, `/arxiv`) כבויות ב-`hermes skills opt-out
    --remove` (ראה "כוונון" למטה). **תמיד מושבתים:** `terminal` (שורת פקודה על
    השרת!), `file` (קריאת קבצים — כולל `.env` עם המפתח!), `code_execution`,
@@ -144,7 +160,7 @@ thread_sessions_per_user: false
   ```yaml
   agent:
     reasoning_effort: "none"      # none|minimal|low|medium|high|... (ברירת מחדל: medium)
-    disabled_toolsets: [browser, spotify, web]
+    disabled_toolsets: [session_search, memory, browser, spotify, web]
   ```
   (חלופה מהצ'אט, מהמספר שלך: `/reasoning none --global`.) `disabled_toolsets`
   מוריד כלי גם אם ערוץ עדיין מפרט אותו.
@@ -170,9 +186,14 @@ thread_sessions_per_user: false
 - אופציונלי (Variable): `HERMES_UPGRADE=1` — עדכון חד-פעמי של גרסת Hermes
   ב-deploy הבא (למשל אם בידוד הזיכרון לא נאכף בגרסה ישנה). אחרי ה-deploy החזירו
   את הערך לריק כדי לא לעדכן בכל push (סחף גרסאות עלול לשבור בוט תקין).
+- אופציונלי (Variable): `HERMES_WIPE_MEMORY=1` — **מחיקה גורפת** חד-פעמית של כל
+  הזיכרון (מעביר את `state.db` לגיבוי `state.db.wiped.*`, נוצר חדש ריק ב-restart).
+  מאפס את **כל** המשתמשים. אחרי ה-deploy החזירו לריק.
 
-בכל deploy ה-CI גם מוודא ש-`group_sessions_per_user: true` ב-`config.yaml`
-(בידוד זיכרון פר-משתמש) — ראה "בידוד זיכרון בין משתמשים".
+בכל deploy ה-CI גם: (א) מוודא `group_sessions_per_user: true`; (ב) מריץ
+`hermes/ensure-private-config.py` שמכריח `session_search`+`memory` להיות ב-
+`disabled_toolsets` — כדי שהמודל לא יוכל לחפש בסשן של משתמש אחר. ראה "בידוד
+זיכרון בין משתמשים".
 
 אז כל push מושך את הריפו, מרענן את `~/.hermes/SOUL.md` ומריץ מחדש את ה-gateway
 (שירות-משתמש, `systemctl --user`) — אוטומטית, בלי לגעת ידנית. (מדלג בשקט אם

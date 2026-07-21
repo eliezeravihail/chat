@@ -28,13 +28,14 @@
 ## עדכון אוטומטי (CI)
 
 `.github/workflows/deploy-gcp.yml` פורס בכל **push ל-`main`**: מתחבר ל-VM ב-SSH,
-מושך את הקוד, מרענן את `~/.hermes/SOUL.md`, ומריץ מחדש את ה-gateway (שירות-משתמש).
-הגדרה חד-פעמית ב-GitHub → Settings → Secrets and variables → Actions:
+מושך את הקוד, מרענן את `~/.hermes/SOUL.md`, אוכף בידוד-פרטיות בין משתמשים
+(‏`group_sessions_per_user` + כיבוי `session_search`/`memory`), ומריץ מחדש את
+ה-gateway. הגדרה חד-פעמית ב-GitHub → Settings → Secrets and variables → Actions:
 
 - **סודות:** `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY`.
-- **אופציונלי** (Variable): `DEPLOY_TARGET=off` להשהיית הפריסה. ברירת המחדל
-  היא `hermes`, אז אין צורך להגדירו כדי שהפריסה תעבוד. (הפעולה מדלגת בשקט אם
-  `GCP_VM_HOST` לא הוגדר.)
+- **אופציונלי** (Variables): `DEPLOY_TARGET=off` להשהיית הפריסה (ברירת מחדל
+  `hermes`); `HERMES_UPGRADE=1` לעדכון גרסה חד-פעמי; `HERMES_WIPE_MEMORY=1`
+  למחיקת זיכרון גורפת חד-פעמית. פרטים ב-**[HERMES.md](HERMES.md)**.
 
 ## רישיון
 

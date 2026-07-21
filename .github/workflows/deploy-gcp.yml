@@ -175,5 +175,16 @@ jobs:
             "${PYBIN:-python3}" -c "import yaml,os;yaml.safe_load(open(os.path.expanduser('~/.hermes/config.yaml')));print('config.yaml: valid YAML')" 2>&1 || echo "config.yaml: INVALID YAML"
             echo "whatsapp enabled in .env: $(grep -q '^WHATSAPP_ENABLED=true' ~/.hermes/.env && echo yes || echo 'no/unset')"
             echo "allowlist set in .env: $(grep -q '^WHATSAPP_ALLOWED_USERS=..*' ~/.hermes/.env && echo yes || echo 'no/empty')"
+            # Is the WhatsApp linked-device session still present? (file counts +
+            # newest mtime only — NEVER contents, so no numbers/JIDs leak). If the
+            # dir is gone/empty, the device was logged out and needs a QR re-scan.
+            for d in ~/.hermes/whatsapp ~/.hermes/whatsapp/session ~/.hermes/whatsapp/auth ~/.hermes/baileys; do
+              if [ -d "$d" ]; then
+                echo "wa-session $d: $(find "$d" -type f 2>/dev/null | wc -l) files; newest $(find "$d" -type f -printf '%TY-%Tm-%Td %TH:%TM\n' 2>/dev/null | sort | tail -1)"
+              fi
+            done
+            # hermes doctor health lines, digit-redacted so no phone numbers/JIDs leak.
+            echo "--- doctor (redacted) ---"
+            timeout 30 hermes doctor 2>&1 | grep -iE 'whatsapp|gateway|platform|connect|session|model|state\.db' | sed -E 's/[0-9]{5,}/<redacted>/g' | tail -20 || echo "  (doctor unavailable)"
             echo "===== end diagnostics ====="
             echo "hermes restarted"

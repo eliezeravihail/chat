@@ -100,8 +100,27 @@ def main() -> int:
             del data["whatsapp"]
             changed = True
 
+    # --- 3. persistent memory / user profile — DISABLE on a shared bot.
+    # Separate from the `memory` toolset above: Hermes keeps a GLOBAL profile it
+    # extracts and stores to ~/.hermes/memories/USER.md (and MEMORY.md) and
+    # INJECTS into the system prompt at the start of every session. It is ONE
+    # file for ALL users, so on a multi-user bot it MIXES people's facts — and
+    # because it's stored (not part of the conversation) it SURVIVES /new. Both
+    # flags must be false; the CI also clears the already-contaminated files.
+    mem = data.get("memory")
+    if not isinstance(mem, dict):
+        mem = {}
+    for k in ("memory_enabled", "user_profile_enabled"):
+        if mem.get(k) is not False:
+            mem[k] = False
+            changed = True
+    data["memory"] = mem
+
     if not changed:
-        print(f"config already correct — disabled_toolsets = {disabled}; no whatsapp group keys")
+        print(
+            f"config already correct — disabled_toolsets = {disabled}; "
+            f"no whatsapp group keys; memory/user_profile disabled"
+        )
         return 0
 
     try:
@@ -113,7 +132,8 @@ def main() -> int:
 
     print(
         f"config updated — disabled_toolsets = {disabled}; "
-        f"removed whatsapp group_policy/require_mention/mention_patterns (was breaking gateway startup)"
+        f"removed whatsapp group keys (were breaking gateway startup); "
+        f"memory.memory_enabled/user_profile_enabled = false"
     )
     return 0
 

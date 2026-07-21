@@ -107,6 +107,19 @@ jobs:
             PYBIN="$HOME/hermes-env/bin/python"
             [ -x "$PYBIN" ] || PYBIN="$(command -v python3 || true)"
             [ -n "$PYBIN" ] && "$PYBIN" ~/chat/hermes/ensure-private-config.py "$CFG" || true
+            # Clear the GLOBAL persistent-memory profile. Hermes stores one
+            # ~/.hermes/memories/USER.md + MEMORY.md for ALL users, injects it into
+            # every session's system prompt, and it survives /new — so it mixed the
+            # two users. With the feature now disabled in config, empty these files
+            # (backing up any non-empty one) so the mixed profile stops being
+            # injected. Idempotent: once empty, later deploys skip them.
+            for f in "$HOME/.hermes/memories/USER.md" "$HOME/.hermes/memories/MEMORY.md"; do
+              if [ -s "$f" ]; then
+                cp "$f" "$f.cleared.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+                : > "$f"
+                echo "cleared $(basename "$f") (backed up)"
+              fi
+            done
             # Log the installed version every deploy (visible in the Actions run
             # log) — WhatsApp DM sessions are keyed per phone number only in
             # recent builds; an old build collapses all DMs into one shared

@@ -1,0 +1,11 @@
+One-shot sentinel: while this file exists AND the GitHub Secret
+OWNER_WHATSAPP_NUMBER is set, the deploy deletes ONLY that number's sessions
+from ~/.hermes/state.db (DM + group participation), keyed by session_key.
+
+The delete helper backs up the db to state.db.predelete.<size>b first and only
+removes rows matching that number, so everyone else's data (e.g. the friend's)
+is untouched. Guarded by the on-VM marker ~/.hermes/.owner_sessions_deleted so
+it runs at most once.
+
+Dormant until the secret is set. Remove this file (and clear the secret) once
+the delete has run.

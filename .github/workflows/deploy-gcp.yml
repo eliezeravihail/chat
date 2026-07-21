@@ -148,8 +148,32 @@ jobs:
                 echo "archived state.db -> state.db.wiped.$STAMP"
               fi
             fi
-            systemctl --user restart hermes-gateway 2>/dev/null \
-              || hermes gateway restart 2>/dev/null \
-              || sudo systemctl restart hermes-gateway 2>/dev/null \
-              || true
+            # Restart the gateway on the correct unit. Pick user vs system by
+            # which unit actually exists (a wipe may have stopped it), and use
+            # `restart` (which also starts a stopped unit). Avoid the bare
+            # `hermes gateway restart` unless no unit exists — it can run in the
+            # foreground and hang a non-interactive SSH session.
+            UP=""
+            if systemctl --user cat hermes-gateway >/dev/null 2>&1; then
+              systemctl --user restart hermes-gateway 2>/dev/null && UP="user"
+            fi
+            if [ -z "$UP" ] && sudo systemctl cat hermes-gateway >/dev/null 2>&1; then
+              sudo systemctl restart hermes-gateway 2>/dev/null && UP="system"
+            fi
+            if [ -z "$UP" ]; then
+              timeout 25 hermes gateway restart 2>/dev/null || true
+              UP="fallback"
+            fi
+            # SAFE diagnostics — service STATE only. This Actions log is PUBLIC,
+            # so never print logs, transcripts, .env, or config *contents* here.
+            echo "===== diagnostics (state only) ====="
+            echo "restarted via: $UP"
+            echo "user  is-active: $(systemctl --user is-active hermes-gateway 2>&1)"
+            echo "sys   is-active: $(sudo systemctl is-active hermes-gateway 2>&1)"
+            echo "user  state: $(systemctl --user show -p ActiveState -p SubState -p Result -p ExecMainStatus hermes-gateway 2>&1 | tr '\n' ' ')"
+            echo "sys   state: $(sudo systemctl show -p ActiveState -p SubState -p Result -p ExecMainStatus hermes-gateway 2>&1 | tr '\n' ' ')"
+            "${PYBIN:-python3}" -c "import yaml,os;yaml.safe_load(open(os.path.expanduser('~/.hermes/config.yaml')));print('config.yaml: valid YAML')" 2>&1 || echo "config.yaml: INVALID YAML"
+            echo "whatsapp enabled in .env: $(grep -q '^WHATSAPP_ENABLED=true' ~/.hermes/.env && echo yes || echo 'no/unset')"
+            echo "allowlist set in .env: $(grep -q '^WHATSAPP_ALLOWED_USERS=..*' ~/.hermes/.env && echo yes || echo 'no/empty')"
+            echo "===== end diagnostics ====="
             echo "hermes restarted"

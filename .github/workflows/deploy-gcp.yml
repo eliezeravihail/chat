@@ -216,11 +216,21 @@ jobs:
               echo "running hermes postinstall (node bridge deps)…"
               timeout 180 hermes postinstall 2>/dev/null || echo "  (postinstall skipped/failed)"
             fi
-            # Restart the gateway on the correct unit. Pick user vs system by
-            # which unit actually exists (a wipe may have stopped it), and use
-            # `restart` (which also starts a stopped unit). Avoid the bare
-            # `hermes gateway restart` unless no unit exists — it can run in the
-            # foreground and hang a non-interactive SSH session.
+            # ROOT CAUSE of the WhatsApp outage: the bridge is a node HTTP server
+            # on port 3000. Repeated restarts leave a STALE bridge holding 3000, so
+            # the fresh bridge can't bind and the gateway logs "Cannot connect to
+            # 127.0.0.1:3000" then exits (service Failed). Free the port BEFORE the
+            # restart. Kill by PORT (fuser/lsof), never by name — 'node'/'whatsapp'
+            # would also match THIS deploy script and kill the run.
+            systemctl --user stop hermes-gateway 2>/dev/null \
+              || sudo systemctl stop hermes-gateway 2>/dev/null || true
+            fuser -k 3000/tcp 2>/dev/null \
+              || kill $(lsof -ti tcp:3000 2>/dev/null) 2>/dev/null \
+              || true
+            sleep 2
+            # (Re)start the gateway on the correct unit. `restart` also starts a
+            # stopped unit. Avoid bare `hermes gateway restart` unless no unit
+            # exists — it can run in the foreground and hang a non-login SSH session.
             UP=""
             if systemctl --user cat hermes-gateway >/dev/null 2>&1; then
               systemctl --user restart hermes-gateway 2>/dev/null && UP="user"
@@ -232,9 +242,9 @@ jobs:
               timeout 25 hermes gateway restart 2>/dev/null || true
               UP="fallback"
             fi
-            # After a forced restart, give the WhatsApp bridge time to spawn and
-            # attempt its connection before the diagnostics probe it.
-            [ -n "$FORCE_BRIDGE" ] && { echo "waiting for bridge to connect…"; sleep 20; } || true
+            # Give the WhatsApp bridge time to spawn on the freed port and connect
+            # before the diagnostics probe it (it can take >15s to come up).
+            echo "waiting for bridge to bind port 3000 and connect…"; sleep 25
             # SAFE diagnostics — service STATE only. This Actions log is PUBLIC,
             # so never print logs, transcripts, .env, or config *contents* here.
             echo "===== diagnostics (state only) ====="

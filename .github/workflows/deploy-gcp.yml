@@ -186,6 +186,23 @@ jobs:
               "${PYBIN:-python3}" ~/chat/hermes/delete-user-sessions.py "$HOME/.hermes/state.db" "${OWNER_NUMBER}" \
                 && touch "$HOME/.hermes/.owner_sessions_deleted"
             fi
+            # Forced clean bridge restart (sentinel hermes/FORCE_BRIDGE_RESTART):
+            # a plain `systemctl restart` hasn't been reviving the WhatsApp
+            # (Baileys/node) bridge. Fully STOP the gateway (kills its child
+            # processes in the service cgroup, including a stale bridge), ensure
+            # the node bridge deps are present, then let the restart below start
+            # it fresh. No pkill — matching 'whatsapp'/'node'/'baileys' would also
+            # match THIS deploy script and kill the run.
+            FORCE_BRIDGE=""
+            if [ -f ~/chat/hermes/FORCE_BRIDGE_RESTART ]; then
+              FORCE_BRIDGE=1
+              echo "forced clean bridge restart requested"
+              systemctl --user stop hermes-gateway 2>/dev/null \
+                || sudo systemctl stop hermes-gateway 2>/dev/null || true
+              sleep 3
+              echo "running hermes postinstall (node bridge deps)…"
+              timeout 180 hermes postinstall 2>/dev/null || echo "  (postinstall skipped/failed)"
+            fi
             # Restart the gateway on the correct unit. Pick user vs system by
             # which unit actually exists (a wipe may have stopped it), and use
             # `restart` (which also starts a stopped unit). Avoid the bare
@@ -202,6 +219,9 @@ jobs:
               timeout 25 hermes gateway restart 2>/dev/null || true
               UP="fallback"
             fi
+            # After a forced restart, give the WhatsApp bridge time to spawn and
+            # attempt its connection before the diagnostics probe it.
+            [ -n "$FORCE_BRIDGE" ] && { echo "waiting for bridge to connect…"; sleep 20; } || true
             # SAFE diagnostics — service STATE only. This Actions log is PUBLIC,
             # so never print logs, transcripts, .env, or config *contents* here.
             echo "===== diagnostics (state only) ====="

@@ -1,5 +1,0 @@
-One-shot sentinel: while this file exists, the deploy does a FULL clean restart
-of the gateway (stop → hermes postinstall → start → wait) to revive the WhatsApp
-Baileys/node bridge, which a plain restart wasn't bringing back up.
-
-Remove this file in a follow-up commit once the bridge is connected again.

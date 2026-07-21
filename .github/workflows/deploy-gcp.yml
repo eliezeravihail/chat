@@ -247,13 +247,16 @@ jobs:
             # only the process NAME/arg tokens with digits stripped — no content.
             echo "--- wa bridge process ---"
             (pgrep -fa 'baileys|whatsapp|wa-bridge|node' 2>/dev/null | sed -E 's/[0-9]{3,}/<n>/g' | grep -iE 'baileys|whatsapp|node' | head -3) || echo "  (no bridge/node process found)"
-            # WhatsApp CONNECTION-STATE keywords from the user-service journal.
-            # grep -oE prints ONLY the matched state phrase (never the full line),
-            # so message content can't leak; digits are stripped as a second guard.
-            echo "--- wa connection state (keywords only) ---"
-            (journalctl --user -u hermes-gateway --no-pager -n 600 2>/dev/null \
-              | grep -oiE 'connection (open|close[d]?|update)|logged.?out|restart required|qr|scan|reconnect(ing)?|stream error(ed)?|conflict|precondition|unauthorized|40[0-9]|disconnect(ed)?|bridge (up|down|started|stopped|exited)|baileys' \
-              | sed -E 's/[0-9]+/<n>/g' | tr 'A-Z' 'a-z' | sort | uniq -c | sort -rn | head -15) \
-              || echo "  (no journal events found)"
+            # Gateway log lines about the WhatsApp bridge / connection / errors.
+            # Filtered to network-layer + error keywords (NOT conversation content)
+            # to protect the friend's therapy data even though this log is private.
+            # Phone numbers/JIDs are still redacted.
+            echo "--- gateway log: whatsapp / connection / errors (tail) ---"
+            (journalctl --user -u hermes-gateway --no-pager -n 1500 2>/dev/null \
+              | grep -iE 'whatsapp|baileys|bridge|websocket|connection (open|close|update|failure)|logged.?out|logout|disconnect|reconnect|qr|conflict|stream error|precondition|unauthorized|40[0-9]|ECONN|EADDR|spawn|ENOENT|node:|traceback|error|exception|failed' \
+              | grep -viE 'content=|"content"|"text"|body=|"body"' \
+              | sed -E 's/[0-9]{6,}/<num>/g; s/[0-9]+@(s\.whatsapp\.net|g\.us|lid)/<jid>/g' \
+              | tail -45) \
+              || echo "  (no gateway journal available)"
             echo "===== end diagnostics ====="
             echo "hermes restarted"

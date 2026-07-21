@@ -90,12 +90,13 @@ mkdir -p "$HH"   # now the decrypted (mounted) view
 # Primary model + free fallback chain. Edit freely — `hermes fallback list`
 # shows the effective chain. Free slugs rot; replace with any current ones.
 #
-# SECURITY: ZERO tools on every channel (verified empirically: an empty
-# platform list yields 0 tool schemas) — pure language-model chat only.
-# Hermes' default ("hermes-cli") would give the model terminal, file
-# access and code execution ON THIS VM. The owner opted out of CLI use,
-# so nothing is enabled anywhere; to add a tool later, list it under the
-# relevant platform_toolsets entry.
+# SECURITY: the empty allowlists below aim for pure language-model chat, but we
+# ALSO set `agent.disabled_toolsets` — a global denylist that wins over every
+# allowlist and default. This is critical on a MULTI-USER bot: the built-in
+# `session_search` and `memory` toolsets search/recall across ALL stored
+# sessions with NO per-user filter, so if they were ever active one person's
+# data could surface in another's chat. The denylist forces them off for good.
+# `browser`/`spotify`/`web` are heavy/irrelevant and kept off too.
 cat > "$HH/config.yaml" <<EOF
 model: ${PRIMARY_MODEL}
 # Per-user memory isolation. Each WhatsApp DM is keyed by phone number and each
@@ -104,6 +105,12 @@ model: ${PRIMARY_MODEL}
 # privacy off silently (critical for a therapy bot with more than one user).
 group_sessions_per_user: true
 thread_sessions_per_user: false
+agent:
+  # Global denylist — removes these toolsets on every channel, beating any
+  # allowlist. session_search + memory are the privacy-critical ones (they read
+  # across all users' sessions). Conversation continuity is NOT affected: the
+  # ongoing transcript is part of the session, not the 'memory' toolset.
+  disabled_toolsets: [session_search, memory, browser, spotify, web]
 fallback_providers:
   - provider: openrouter
     model: meta-llama/llama-3.3-70b-instruct:free

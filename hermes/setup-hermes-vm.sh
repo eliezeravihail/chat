@@ -120,15 +120,10 @@ platform_toolsets:
   whatsapp: []
   cli: []
 toolsets: []
-whatsapp:
-  # Groups: default policy is "pairing" (bot ignores group messages until a
-  # group is approved). "open" processes groups; require_mention keeps it quiet
-  # unless addressed (native @mention, a reply to it, or the name below). Switch
-  # to group_policy: allowlist + group_allow_from: ["<jid>@g.us"] to limit it to
-  # one specific group.
-  group_policy: open
-  require_mention: true
-  mention_patterns: ["אהרון"]
+# NOTE: do NOT set whatsapp.group_policy: open — Hermes refuses to start the
+# gateway under an 'open' policy unless WHATSAPP_ALLOW_ALL_USERS is enabled
+# (which would answer everyone). For group responses use group_policy: allowlist
+# with a specific group JID instead.
 EOF
 
 # Secrets + WhatsApp whitelist (only these numbers get replies).

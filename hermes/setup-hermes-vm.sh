@@ -98,6 +98,12 @@ mkdir -p "$HH"   # now the decrypted (mounted) view
 # relevant platform_toolsets entry.
 cat > "$HH/config.yaml" <<EOF
 model: ${PRIMARY_MODEL}
+# Per-user memory isolation. Each WhatsApp DM is keyed by phone number and each
+# group message by participant, so one person's conversation/memory never bleeds
+# into another's. 'true' is Hermes' default; we pin it so a hand-edit can't turn
+# privacy off silently (critical for a therapy bot with more than one user).
+group_sessions_per_user: true
+thread_sessions_per_user: false
 fallback_providers:
   - provider: openrouter
     model: meta-llama/llama-3.3-70b-instruct:free

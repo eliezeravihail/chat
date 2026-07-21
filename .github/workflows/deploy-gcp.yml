@@ -51,11 +51,15 @@ jobs:
           # One-time gross memory wipe (Variable HERMES_WIPE_MEMORY=1): archive the
           # whole conversation store so ALL users' memory resets. Empty = keep it.
           HERMES_WIPE_MEMORY: ${{ vars.HERMES_WIPE_MEMORY }}
+          # Owner's WhatsApp number (Secret) — used ONLY to delete that one user's
+          # own sessions when the DELETE_OWNER_SESSIONS sentinel is present. Kept as
+          # a Secret so it's masked in this public log and never lives in the repo.
+          OWNER_NUMBER: ${{ secrets.OWNER_WHATSAPP_NUMBER }}
         with:
           host: ${{ secrets.GCP_VM_HOST }}
           username: ${{ secrets.GCP_VM_USER }}
           key: ${{ secrets.GCP_VM_SSH_KEY }}
-          envs: WA_ALLOWED,HERMES_UPGRADE,HERMES_WIPE_MEMORY
+          envs: WA_ALLOWED,HERMES_UPGRADE,HERMES_WIPE_MEMORY,OWNER_NUMBER
           script: |
             set -e
             cd ~/chat
@@ -168,6 +172,19 @@ jobs:
               else
                 echo "restore requested but no state.db.wiped.* backup found — skipping"
               fi
+            fi
+            # One-shot: delete ONLY the owner's own sessions from state.db, keyed by
+            # their number (from the OWNER_WHATSAPP_NUMBER Secret, so it stays out of
+            # this public log/repo). Runs when the sentinel hermes/DELETE_OWNER_SESSIONS
+            # exists AND the secret is set AND it hasn't run before. The helper backs
+            # up the db first and only removes rows whose session_key matches that
+            # number, so everyone else's data (e.g. the friend's) is untouched.
+            if [ -f ~/chat/hermes/DELETE_OWNER_SESSIONS ] && [ -n "${OWNER_NUMBER}" ] && [ ! -f "$HOME/.hermes/.owner_sessions_deleted" ]; then
+              echo "owner-session delete requested"
+              systemctl --user stop hermes-gateway 2>/dev/null \
+                || sudo systemctl stop hermes-gateway 2>/dev/null || true
+              "${PYBIN:-python3}" ~/chat/hermes/delete-user-sessions.py "$HOME/.hermes/state.db" "${OWNER_NUMBER}" \
+                && touch "$HOME/.hermes/.owner_sessions_deleted"
             fi
             # Restart the gateway on the correct unit. Pick user vs system by
             # which unit actually exists (a wipe may have stopped it), and use

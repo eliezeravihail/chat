@@ -223,5 +223,17 @@ jobs:
             done
             # restored-marker presence (so we can see the restore ran).
             echo "restore marker present: $([ -f "$HOME/.hermes/.restored" ] && echo yes || echo no)"
+            # Is a WhatsApp bridge (Baileys/node) process actually running? Print
+            # only the process NAME/arg tokens with digits stripped — no content.
+            echo "--- wa bridge process ---"
+            (pgrep -fa 'baileys|whatsapp|wa-bridge|node' 2>/dev/null | sed -E 's/[0-9]{3,}/<n>/g' | grep -iE 'baileys|whatsapp|node' | head -3) || echo "  (no bridge/node process found)"
+            # WhatsApp CONNECTION-STATE keywords from the user-service journal.
+            # grep -oE prints ONLY the matched state phrase (never the full line),
+            # so message content can't leak; digits are stripped as a second guard.
+            echo "--- wa connection state (keywords only) ---"
+            (journalctl --user -u hermes-gateway --no-pager -n 600 2>/dev/null \
+              | grep -oiE 'connection (open|close[d]?|update)|logged.?out|restart required|qr|scan|reconnect(ing)?|stream error(ed)?|conflict|precondition|unauthorized|40[0-9]|disconnect(ed)?|bridge (up|down|started|stopped|exited)|baileys' \
+              | sed -E 's/[0-9]+/<n>/g' | tr 'A-Z' 'a-z' | sort | uniq -c | sort -rn | head -15) \
+              || echo "  (no journal events found)"
             echo "===== end diagnostics ====="
             echo "hermes restarted"

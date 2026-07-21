@@ -82,30 +82,26 @@ def main() -> int:
     agent["disabled_toolsets"] = disabled
     data["agent"] = agent
 
-    # --- 2. WhatsApp group responses (fill defaults, respect explicit values) -
+    # --- 2. WhatsApp group settings — REMOVE the group-response keys.
+    # `group_policy: open` makes Hermes REFUSE TO START unless WHATSAPP_ALLOW_ALL_USERS
+    # is enabled (which would answer everyone — unsafe). That crash-loops the gateway
+    # and takes the whole bot offline. So strip the keys we previously set here, back
+    # to stock, so the gateway starts and DMs work. Group responses, if wanted, need
+    # `group_policy: allowlist` + a specific group JID — never 'open'.
     wa = data.get("whatsapp")
-    if not isinstance(wa, dict):
-        wa = {}
-    if "group_policy" not in wa:            # default "pairing" ignores groups
-        wa["group_policy"] = "open"
-        changed = True
-    if "require_mention" not in wa:         # only answer when addressed
-        wa["require_mention"] = True
-        changed = True
-    patterns = wa.get("mention_patterns")
-    if not isinstance(patterns, list):
-        patterns = []
-    if BOT_NAME not in patterns:            # let owner address it by name
-        patterns.append(BOT_NAME)
-        changed = True
-    wa["mention_patterns"] = patterns
-    data["whatsapp"] = wa
+    if isinstance(wa, dict):
+        for k in ("group_policy", "require_mention", "mention_patterns"):
+            if k in wa:
+                del wa[k]
+                changed = True
+        if wa:
+            data["whatsapp"] = wa
+        elif "whatsapp" in data:
+            del data["whatsapp"]
+            changed = True
 
     if not changed:
-        print(
-            f"config already correct — disabled_toolsets = {disabled}; "
-            f"whatsapp.group_policy = {wa['group_policy']}"
-        )
+        print(f"config already correct — disabled_toolsets = {disabled}; no whatsapp group keys")
         return 0
 
     try:
@@ -117,9 +113,7 @@ def main() -> int:
 
     print(
         f"config updated — disabled_toolsets = {disabled}; "
-        f"whatsapp.group_policy = {wa['group_policy']}, "
-        f"require_mention = {wa['require_mention']}, "
-        f"mention_patterns = {patterns}"
+        f"removed whatsapp group_policy/require_mention/mention_patterns (was breaking gateway startup)"
     )
     return 0
 

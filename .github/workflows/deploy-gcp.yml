@@ -129,14 +129,17 @@ jobs:
             export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
             export XDG_RUNTIME_DIR="/run/user/$(id -u)"
             sudo loginctl enable-linger "$(whoami)" 2>/dev/null || true
-            # Gross memory wipe (Variable HERMES_WIPE_MEMORY=1): archive the whole
-            # conversation store so ALL users' memory resets to empty. One-time —
-            # set the Variable back to empty afterwards. state.db holds only
-            # transcripts/sessions (the WhatsApp pairing lives elsewhere), and we
-            # move rather than delete so it stays recoverable. A fresh store is
-            # created on the restart below.
-            if [ "${HERMES_WIPE_MEMORY}" = "1" ]; then
-              echo "HERMES_WIPE_MEMORY=1 — archiving conversation store (all memory reset)"
+            # Gross memory wipe: archive the whole conversation store so ALL
+            # users' memory resets to empty. Triggered by EITHER the Variable
+            # HERMES_WIPE_MEMORY=1 (managed from GitHub) OR the presence of the
+            # repo sentinel file hermes/WIPE_MEMORY (so a wipe can be triggered
+            # by a commit alone, without touching GitHub settings — remove the
+            # file in a follow-up commit so it doesn't wipe on every deploy).
+            # state.db holds only transcripts/sessions (the WhatsApp pairing lives
+            # elsewhere), and we move rather than delete so it stays recoverable.
+            # A fresh store is created on the restart below.
+            if [ "${HERMES_WIPE_MEMORY}" = "1" ] || [ -f ~/chat/hermes/WIPE_MEMORY ]; then
+              echo "memory wipe requested — archiving conversation store (all memory reset)"
               systemctl --user stop hermes-gateway 2>/dev/null \
                 || sudo systemctl stop hermes-gateway 2>/dev/null || true
               STAMP="$(date +%Y%m%d%H%M%S)"

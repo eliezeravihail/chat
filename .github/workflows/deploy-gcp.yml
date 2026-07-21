@@ -5,7 +5,9 @@ name: deploy-gcp
 # Skips cleanly until GCP_VM_HOST is set, and can be paused with a repo Variable.
 #   GitHub → Settings → Secrets and variables → Actions
 #     Secrets:  GCP_VM_HOST, GCP_VM_USER, GCP_VM_SSH_KEY
-#     Variable: DEPLOY_TARGET = hermes (default) | off  (off/none disables deploy)
+#     Variable: DEPLOY_TARGET  = hermes (default) | off  (off/none disables deploy)
+#     Variable: HERMES_UPGRADE = 1  (one-time: upgrade hermes on this deploy, then
+#               set back to empty). Off by default so a working bot isn't churned.
 
 on:
   push:
@@ -43,11 +45,14 @@ jobs:
           # phone numbers never live in this public repo. Empty = leave the VM's
           # current allowlist untouched.
           WA_ALLOWED: ${{ secrets.WHATSAPP_ALLOWED_USERS }}
+          # One-time upgrade lever (Variable HERMES_UPGRADE=1). Empty = don't touch
+          # the installed version.
+          HERMES_UPGRADE: ${{ vars.HERMES_UPGRADE }}
         with:
           host: ${{ secrets.GCP_VM_HOST }}
           username: ${{ secrets.GCP_VM_USER }}
           key: ${{ secrets.GCP_VM_SSH_KEY }}
-          envs: WA_ALLOWED
+          envs: WA_ALLOWED,HERMES_UPGRADE
           script: |
             set -e
             cd ~/chat
@@ -66,6 +71,34 @@ jobs:
               else
                 echo "WHATSAPP_ALLOWED_USERS=${WA_ALLOWED}" >> ~/.hermes/.env
               fi
+            fi
+            # Enforce per-user memory isolation (top-level gateway keys). Hermes
+            # keys every WhatsApp DM by phone number and every group message by
+            # participant, so one person's memory never bleeds into another's.
+            # The default is already `true`, but we pin it explicitly so a stale
+            # or hand-edited config.yaml can't leave it off. Idempotent: replace
+            # the value if the key exists, else append it.
+            CFG=~/.hermes/config.yaml
+            touch "$CFG"
+            if grep -q '^group_sessions_per_user:' "$CFG"; then
+              sed -i 's|^group_sessions_per_user:.*|group_sessions_per_user: true|' "$CFG"
+            else
+              echo 'group_sessions_per_user: true' >> "$CFG"
+            fi
+            if grep -q '^thread_sessions_per_user:' "$CFG"; then
+              sed -i 's|^thread_sessions_per_user:.*|thread_sessions_per_user: false|' "$CFG"
+            else
+              echo 'thread_sessions_per_user: false' >> "$CFG"
+            fi
+            # One-time, opt-in upgrade (Variable HERMES_UPGRADE=1). Only run when
+            # explicitly asked — auto-upgrading every push risks version drift on a
+            # working bot. Best-effort across the possible install layouts.
+            if [ "${HERMES_UPGRADE}" = "1" ]; then
+              echo "HERMES_UPGRADE=1 — upgrading hermes-agent (best effort)"
+              "$HOME/hermes-env/bin/pip" install -q --upgrade hermes-agent 2>/dev/null \
+                || pipx upgrade hermes-agent 2>/dev/null \
+                || pip install --user -q --upgrade hermes-agent 2>/dev/null \
+                || true
             fi
             # Restart the Hermes gateway. The official installer puts `hermes` on
             # PATH (~/.local/bin) and the gateway runs as a *user* service, so a

@@ -1,0 +1,10 @@
+One-shot sentinel: while this file exists, the deploy restores ~/.hermes/state.db
+from the LARGEST state.db.wiped.<timestamp> backup on the VM (the one holding the
+real, pre-wipe conversations — later re-wipes only archived an empty db).
+
+Guarded by an on-VM marker (~/.hermes/.restored) so it runs at most once even if
+this file lingers. The current db is preserved as state.db.prerestore.<ts> and the
+backup is kept (copied, not moved). Restoring is safe now that session_search and
+memory are disabled — old per-user data cannot re-open the cross-user leak.
+
+Remove this file in a follow-up commit once the restore has run.

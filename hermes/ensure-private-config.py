@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ensure the Hermes config is correct for a shared, multi-user WhatsApp bot.
 
-Two things, both idempotent and non-destructive:
+Three things, all idempotent and non-destructive:
 
 1. PRIVACY — ``agent.disabled_toolsets`` disables the toolsets that can leak one
    user's data into another user's chat:
@@ -23,6 +23,11 @@ Two things, both idempotent and non-destructive:
    pattern. Only defaults are filled in — an existing explicit value (e.g. a
    later switch to "allowlist") is respected, never overwritten.
 
+3. VOICE NOTES — fills in ``stt`` defaults (provider groq, Hebrew, full
+   whisper-large-v3, transcripts echoed back to the chat) so inbound WhatsApp
+   voice messages are transcribed. Only MISSING keys are added; an explicit
+   value (e.g. a different provider) is respected, never overwritten.
+
 Usage:
     python ensure-private-config.py /path/to/config.yaml
 
@@ -39,6 +44,17 @@ DISABLE = ["session_search", "memory", "browser", "spotify", "web"]
 # The bot's name — added to WhatsApp mention patterns so it responds in a group
 # when addressed by name, not only when @mentioned.
 BOT_NAME = "אהרון"
+
+# Voice-note transcription defaults (see setup-hermes-vm.sh for the rationale).
+# Groq = free tier, good Hebrew; full large-v3 beats turbo on Hebrew. Never
+# 'local' on a free-tier VM. Applied only where the key is absent.
+STT_DEFAULTS = {
+    "enabled": True,
+    "echo_transcripts": True,
+    "provider": "groq",
+    "language": "he",
+}
+STT_GROQ_DEFAULTS = {"model": "whisper-large-v3", "language": "he"}
 
 
 def main() -> int:
@@ -116,10 +132,29 @@ def main() -> int:
             changed = True
     data["memory"] = mem
 
+    # --- 4. voice notes — fill in missing stt defaults (never overwrite). ---
+    stt = data.get("stt")
+    if not isinstance(stt, dict):
+        stt = {}
+    for k, v in STT_DEFAULTS.items():
+        if k not in stt:
+            stt[k] = v
+            changed = True
+    groq = stt.get("groq")
+    if not isinstance(groq, dict):
+        groq = {}
+    for k, v in STT_GROQ_DEFAULTS.items():
+        if k not in groq:
+            groq[k] = v
+            changed = True
+    stt["groq"] = groq
+    data["stt"] = stt
+
     if not changed:
         print(
             f"config already correct — disabled_toolsets = {disabled}; "
-            f"no whatsapp group keys; memory/user_profile disabled"
+            f"no whatsapp group keys; memory/user_profile disabled; "
+            f"stt provider = {stt.get('provider')}"
         )
         return 0
 
@@ -133,7 +168,8 @@ def main() -> int:
     print(
         f"config updated — disabled_toolsets = {disabled}; "
         f"removed whatsapp group keys (were breaking gateway startup); "
-        f"memory.memory_enabled/user_profile_enabled = false"
+        f"memory.memory_enabled/user_profile_enabled = false; "
+        f"stt provider = {stt.get('provider')}"
     )
     return 0
 

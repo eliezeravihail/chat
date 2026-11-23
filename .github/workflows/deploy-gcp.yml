@@ -1,10 +1,13 @@
 name: deploy-gcp
 
-# Auto-deploy the Hermes agent to the GCP VM on push to main: refresh SOUL.md
+# Auto-deploy the Hermes agent to the VM on push to main: refresh SOUL.md
 # into the (encrypted) ~/.hermes store and restart the user gateway service.
+# Plain SSH — works for ANY Ubuntu VM (Oracle Cloud Always Free, GCP, ...);
+# the GCP_* secret names are historical, just put the current VM's values there.
 # Skips cleanly until GCP_VM_HOST is set, and can be paused with a repo Variable.
 #   GitHub → Settings → Secrets and variables → Actions
 #     Secrets:  GCP_VM_HOST, GCP_VM_USER, GCP_VM_SSH_KEY
+#     Secret:   GROQ_API_KEY (optional) — free Groq key for voice-note transcription
 #     Variable: DEPLOY_TARGET  = hermes (default) | off  (off/none disables deploy)
 #     Variable: HERMES_UPGRADE = 1  (one-time: upgrade hermes on this deploy, then
 #               set back to empty). Off by default so a working bot isn't churned.
@@ -45,6 +48,9 @@ jobs:
           # phone numbers never live in this public repo. Empty = leave the VM's
           # current allowlist untouched.
           WA_ALLOWED: ${{ secrets.WHATSAPP_ALLOWED_USERS }}
+          # Free Groq key (console.groq.com) for Hebrew transcription of voice
+          # notes. Synced into ~/.hermes/.env when set; empty = leave as is.
+          GROQ_KEY: ${{ secrets.GROQ_API_KEY }}
           # One-time upgrade lever (Variable HERMES_UPGRADE=1). Empty = don't touch
           # the installed version.
           HERMES_UPGRADE: ${{ vars.HERMES_UPGRADE }}
@@ -59,7 +65,7 @@ jobs:
           host: ${{ secrets.GCP_VM_HOST }}
           username: ${{ secrets.GCP_VM_USER }}
           key: ${{ secrets.GCP_VM_SSH_KEY }}
-          envs: WA_ALLOWED,HERMES_UPGRADE,HERMES_WIPE_MEMORY,OWNER_NUMBER
+          envs: WA_ALLOWED,GROQ_KEY,HERMES_UPGRADE,HERMES_WIPE_MEMORY,OWNER_NUMBER
           script: |
             set -e
             cd ~/chat
@@ -77,6 +83,15 @@ jobs:
                 sed -i "s|^WHATSAPP_ALLOWED_USERS=.*|WHATSAPP_ALLOWED_USERS=${WA_ALLOWED}|" ~/.hermes/.env
               else
                 echo "WHATSAPP_ALLOWED_USERS=${WA_ALLOWED}" >> ~/.hermes/.env
+              fi
+            fi
+            # Sync the Groq key (voice-note transcription) from the GitHub secret.
+            if [ -n "${GROQ_KEY}" ]; then
+              touch ~/.hermes/.env && chmod 600 ~/.hermes/.env
+              if grep -q '^GROQ_API_KEY=' ~/.hermes/.env; then
+                sed -i "s|^GROQ_API_KEY=.*|GROQ_API_KEY=${GROQ_KEY}|" ~/.hermes/.env
+              else
+                echo "GROQ_API_KEY=${GROQ_KEY}" >> ~/.hermes/.env
               fi
             fi
             # Enforce per-user memory isolation (top-level gateway keys). Hermes
@@ -132,8 +147,7 @@ jobs:
             # push (version drift). Best-effort across possible install layouts.
             if [ "${HERMES_UPGRADE}" = "1" ]; then
               echo "HERMES_UPGRADE=1 — upgrading hermes-agent (best effort)"
-              hermes self update 2>/dev/null \
-                || hermes self-update 2>/dev/null \
+              hermes update 2>/dev/null \
                 || "$HOME/hermes-env/bin/pip" install -q --upgrade hermes-agent 2>/dev/null \
                 || pipx upgrade hermes-agent 2>/dev/null \
                 || pip install --user -q --upgrade hermes-agent 2>/dev/null \
@@ -256,6 +270,7 @@ jobs:
             "${PYBIN:-python3}" -c "import yaml,os;yaml.safe_load(open(os.path.expanduser('~/.hermes/config.yaml')));print('config.yaml: valid YAML')" 2>&1 || echo "config.yaml: INVALID YAML"
             echo "whatsapp enabled in .env: $(grep -q '^WHATSAPP_ENABLED=true' ~/.hermes/.env && echo yes || echo 'no/unset')"
             echo "allowlist set in .env: $(grep -q '^WHATSAPP_ALLOWED_USERS=..*' ~/.hermes/.env && echo yes || echo 'no/empty')"
+            echo "groq key set in .env (voice notes): $(grep -q '^GROQ_API_KEY=..*' ~/.hermes/.env && echo yes || echo 'no/empty')"
             # Is the WhatsApp linked-device session still present? (file counts +
             # newest mtime only — NEVER contents, so no numbers/JIDs leak). If the
             # dir is gone/empty, the device was logged out and needs a QR re-scan.

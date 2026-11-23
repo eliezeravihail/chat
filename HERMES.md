@@ -6,6 +6,7 @@
 
 ```
 WhatsApp (מספר ייעודי) ⇄ Hermes על VM חינמי ⇄ OpenRouter (HY3 → חינמי)
+                              ↳ הודעות קוליות → טקסט (Groq Whisper, חינמי)
 ```
 
 > ⚠️ החיבור הוא "מכשיר מקושר" (לא-רשמי) — יש סיכון חסימה למספר. לכן **מספר
@@ -14,39 +15,55 @@ WhatsApp (מספר ייעודי) ⇄ Hermes על VM חינמי ⇄ OpenRouter (H
 ## מה צריך
 1. מפתח OpenRouter (יש לך).
 2. מספר WhatsApp ייעודי פעיל על טלפון כלשהו.
-3. VM חינמי — Google Cloud **e2-micro** (‏1GB; הסקריפט מוסיף swap אוטומטית).
+3. VM חינמי — **Oracle Cloud Always Free** (מומלץ, ראה למטה) או Google Cloud e2-micro.
+4. אופציונלי: מפתח **Groq** חינמי (<https://console.groq.com>) לתמלול הודעות קוליות.
+5. מפתח הצפנה לזיכרון: `openssl rand -base64 32` פעם אחת → שמור כסוד
+   `HERMES_MEMORY_KEY` ב-GitHub. אותו ערך עובר לסקריפט ההקמה, וכך גיבויים
+   ניתנים לשחזור על מכונה חדשה.
 
 ## שלב 1 — VM (פעם אחת, ~10 דק')
-<https://console.cloud.google.com> → Compute Engine → Create instance:
-**e2-micro**, region `us-central1`, Ubuntu 24.04, דיסק 30GB → Create → כפתור **SSH**.
+
+**Oracle Cloud Always Free (0 ₪, גם הכתובת וגם הדיסק):** <https://cloud.oracle.com>
+→ Compute → Instances → Create: Shape **Ampere (VM.Standard.A1.Flex)**, ‏1–4 OCPU,
+‏6–24GB; Image **Ubuntu 24.04** (aarch64); השאר "Assign a public IPv4 address"
+מסומן; הורד את מפתח ה-SSH. אם "Out of capacity" — נסה שוב מאוחר יותר או Availability
+Domain אחר. המשתמש הוא `ubuntu`. SSH מהדפדפן: Instance → Console connection →
+Cloud Shell, או כל לקוח SSH עם המפתח.
+
+**Google Cloud (חלופה):** e2-micro ב-`us-central1`, דיסק **Standard** 30GB, Ubuntu
+24.04. ⚠️ המכונה עצמה חינמית, אבל גוגל מחייבת על כתובת IPv4 חיצונית (~13 ₪
+לחודש) ועל דיסק Balanced. לכן אורקל.
 
 ## שלב 2 — הקמה אוטומטית (סקריפט אחד)
 בטרמינל ה-SSH:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eliezeravihail/chat/main/hermes/setup-hermes-vm.sh -o setup.sh
-OPENROUTER_KEY=sk-or-... ALLOWED_NUMBERS=9725XXXXXXXX,9725YYYYYYYY bash setup.sh
+git clone https://github.com/eliezeravihail/chat ~/chat
+OPENROUTER_KEY=sk-or-... GROQ_KEY=gsk_... HERMES_MEMORY_KEY='<הערך מהסוד>' \
+  ALLOWED_NUMBERS=9725XXXXXXXX,9725YYYYYYYY bash ~/chat/hermes/setup-hermes-vm.sh
 ```
-(`ALLOWED_NUMBERS` = המספרים שמותר להם לדבר עם הבוט — שלך + של החבר, ספרות בלבד.)
+(`ALLOWED_NUMBERS` = המספרים שמותר להם לדבר עם הבוט — שלך + של החבר, ספרות בלבד.
+‏`GROQ_KEY` ו-`HERMES_MEMORY_KEY` אופציונליים אך מומלצים.) הסקריפט עובד גם על ARM.
 
-הסקריפט מגדיר: swap, התקנת Hermes, ‏OpenRouter, מודל ראשי **tencent/hy3** עם
-**נפילה אוטומטית למודלים חינמיים**, אישיות **פסיכותרפיסט בשם אהרון** בעברית
-(SOUL.md — גישה ממוקדת-אדם ומבוססת-אמונה, עם גבולות ברורים והפניה לעזרה
-במצוקה), ו-whitelist.
+הסקריפט מגדיר: swap (רק במכונות קטנות), התקנת Hermes, ‏OpenRouter, מודל ראשי
+**tencent/hy3** עם **נפילה אוטומטית למודלים חינמיים**, תמלול קולי דרך Groq,
+הצפנת `~/.hermes`, אישיות **פסיכותרפיסט בשם אהרון** בעברית (SOUL.md — גישה
+ממוקדת-אדם ומבוססת-אמונה, עם גבולות ברורים והפניה לעזרה במצוקה), whitelist,
+ושירות gateway (מותקן, לא מופעל עד הסריקה).
 
-## שלב 3 — חיבור המספר (כשהוא ביד, ~2 דק')
+## שלב 3 — חיבור המספר והפעלה (פקודה אחת, ~3 דק')
 ```bash
-hermes whatsapp
+bash ~/chat/hermes/repair-whatsapp.sh
 ```
-יוצג QR בטרמינל → בטלפון של מספר הבוט: WhatsApp → מכשירים מקושרים → קשר מכשיר
-→ סרוק. (הסשן נשמר — סריקה חד-פעמית.)
+הסקריפט עוצר כל תהליך קודם, מנקה סשן ישן, מריץ `hermes whatsapp` ומפעיל את
+השירות מיד אחרי "Pairing complete". יוצג QR → בטלפון של מספר הבוט: WhatsApp →
+מכשירים מקושרים → קשר מכשיר → **סרוק את ה-QR הראשון מיד**.
 
-## שלב 4 — הפעלה קבועה
-```bash
-hermes gateway run          # בדיקה: שלח הודעה לבוט מהמספר שלך
-# עובד? הפוך לשירות שעולה לבד:
-sudo env "PATH=$PATH" hermes gateway install --system
-sudo env "PATH=$PATH" hermes gateway start --system
-```
+**ואז 5 דקות לא נוגעים בכלום.** בלי Ctrl+C, בלי restart, בלי `hermes gateway`.
+WhatsApp משלימה את רישום המכשיר בדקות הראשונות; הפסקה באמצע, או שני תהליכים על
+אותו סשן, גורמים ל-"Logged out" ולסריקה מחדש (כך נשבר החיבור באוגוסט 2026, שוב
+ושוב). אחרי 5 דקות: המכשיר מופיע ב"מכשירים מקושרים", ושולחים הודעת בדיקה.
+
+לניתוק עתידי: אותה פקודה. לאתחול נקי בלי סריקה: `repair-whatsapp.sh --keep`.
 
 ## תפעול
 | פקודה | מה |
@@ -59,6 +76,16 @@ sudo env "PATH=$PATH" hermes gateway start --system
 
 אם מודל חינמי ברשימת ה-fallback התיישן — ערוך את `~/.hermes/config.yaml`
 (רשימת `fallback_providers`) לכל slug עדכני מ-<https://openrouter.ai/models/?q=free>.
+
+## הודעות קוליות
+
+הודעה קולית שנשלחת לבוט מתומללת אוטומטית (Hermes מובנה; הספק: **Groq**,
+מודל `whisper-large-v3`, עברית) ונכנסת לשיחה כטקסט. בנוסף, התמלול הגולמי נשלח
+חזרה לצ'אט (‏🎙️ "…"), כך שמי שמעדיף לקרוא מקבל טקסט. המפתח: סוד `GROQ_API_KEY`
+ב-GitHub (מסונכרן ל-`~/.hermes/.env` בכל deploy) או `GROQ_KEY` בהקמה. בלי מפתח
+הבוט עונה שההקלטה לא תומללה. לא להשתמש בתמלול מקומי (`provider: local`) על
+מכונה חינמית — Whisper שמבין עברית צריך מעבד חזק. להגדרות: בלוק `stt` ב-
+`~/.hermes/config.yaml` (‏`echo_transcripts: false` מבטל את ההד).
 
 ## הצפנה
 
@@ -74,6 +101,26 @@ sudo env "PATH=$PATH" hermes gateway start --system
 `~/.hermes.key` ‏(‏0600; אפשר לספק דרך הסוד `HERMES_MEMORY_KEY`). מותקן אוטומטית
 באתחול (שירות `hermes-crypt`). כך **אין קבצים פתוחים עם תוכן שיחות על המחשב**.
 (זה למטרת "לא לשמור פליינטקסט", לא נגד גניבת הדיסק — לשם כך צריך מפתח מחוץ למכונה.)
+
+## גיבוי ושחזור
+
+מחיקת ה-VM = מחיקת הזיכרון, אלא אם מגבים. `.github/workflows/backup-memory.yml`
+מושך כל לילה צילום עקבי של `state.db` (‏+ `memories/` + קרדנציאלי הוואטסאפ),
+מצפין אותו ב-AES-256 **עם מפתח ההצפנה של המכונה** (`~/.hermes.key` =
+הסוד `HERMES_MEMORY_KEY`), ומעלה אותו לריפו **פרטי** נפרד, 14 אחרונים. שום דבר
+לא מודפס ללוג. הגדרה חד-פעמית:
+
+1. ריפו פרטי ריק, למשל `<you>/chat-backups`.
+2. טוקן Fine-grained לריפו הזה בלבד, ‏Contents: Read and write.
+3. בריפו הזה: Secret ‏`BACKUP_REPO_TOKEN`, ‏Variable ‏`BACKUP_REPO=<you>/chat-backups`.
+
+שחזור על מכונה חדשה (אחרי `setup-hermes-vm.sh` עם אותו `HERMES_MEMORY_KEY`):
+```bash
+bash ~/chat/hermes/restore-backup.sh hermes-YYYYMMDD-HHMM.tar.enc            # זיכרון בלבד
+bash ~/chat/hermes/restore-backup.sh hermes-....tar.enc --with-whatsapp     # + החיבור, בלי QR
+```
+`--with-whatsapp` רק כשהמכונה הישנה כבר לא קיימת — שתי מכונות על אותו קישור =
+ניתוק מיידי. חלופה בלי הגדרות: באורקל, Boot volume → Create backup (חינם, עד 5).
 
 ## זיכרון שיחה ואיפוס
 
@@ -207,7 +254,11 @@ whatsapp:
 `.github/workflows/deploy-gcp.yml` מריץ deploy בכל push ל-main. כל שנדרש הוא
 הסודות ב-GitHub → Settings → Secrets and variables → Actions → Secrets:
 
-- `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY`.
+- `GCP_VM_HOST`, `GCP_VM_USER`, `GCP_VM_SSH_KEY` — SSH רגיל; השמות היסטוריים,
+  עובד מול כל VM (אורקל, גוגל). ב-Oracle המשתמש הוא `ubuntu`.
+- אופציונלי (Secret): `GROQ_API_KEY` — תמלול הודעות קוליות (ראה "הודעות קוליות").
+- אופציונלי (Secret): `WHATSAPP_ALLOWED_USERS` — המורשים, מנוהלים מ-GitHub.
+- גיבוי לילי: `BACKUP_REPO_TOKEN` + ‏`BACKUP_REPO` (ראה "גיבוי ושחזור").
 - אופציונלי (Variable): `DEPLOY_TARGET=off` להשהיית הפריסה. ברירת המחדל היא
   `hermes`, אז אין צורך להגדירו כדי שהפריסה תעבוד.
 - אופציונלי (Variable): `HERMES_UPGRADE=1` — עדכון חד-פעמי של גרסת Hermes

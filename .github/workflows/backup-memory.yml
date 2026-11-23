@@ -1,0 +1,114 @@
+name: backup-memory
+
+# Nightly ENCRYPTED backup of the bot's memory to a PRIVATE repo, so that
+# deleting/losing the VM never again deletes the conversations.
+#
+# What is backed up (tar.gz, then AES-256 with the VM's own ~/.hermes.key):
+#   - state.db           conversation memory (consistent SQLite snapshot)
+#   - memories/          Hermes notes (disabled on this bot, kept for completeness)
+#   - whatsapp/session/  the WhatsApp linked-device credentials (lets a rebuilt
+#                        VM reconnect WITHOUT a new QR scan — restore only once
+#                        the old VM is gone, two machines on one link = logout)
+#   NOT backed up: .env (API keys live in GitHub secrets), config.yaml (regenerated).
+#
+# The ciphertext leaves the VM over SSH straight into a file on the runner —
+# nothing is printed to this (public) log — and is committed to the backups
+# repo, keeping the last 14. It can only be decrypted with the key
+# (= GitHub secret HERMES_MEMORY_KEY, the value you passed to setup-hermes-vm.sh).
+#
+# Setup (skips cleanly until done):
+#   1. Create a PRIVATE repo, e.g. <you>/chat-backups (empty is fine).
+#   2. Fine-grained token: Settings → Developer settings → Personal access
+#      tokens → Fine-grained → that repo only → Contents: Read and write.
+#   3. In THIS repo: Secrets → BACKUP_REPO_TOKEN = the token;
+#      Variables → BACKUP_REPO = <you>/chat-backups
+#   (GCP_VM_* secrets are the same ones deploy-gcp.yml uses.)
+#
+# Restore on a (new) VM — see hermes/restore-backup.sh.
+
+on:
+  schedule:
+    - cron: '23 2 * * *'      # daily 02:23 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide whether to run
+        id: gate
+        env:
+          HOST: ${{ secrets.GCP_VM_HOST }}
+          REPO: ${{ vars.BACKUP_REPO }}
+          TOKEN: ${{ secrets.BACKUP_REPO_TOKEN }}
+        run: |
+          if [ -z "$HOST" ]; then echo "GCP_VM_HOST not set — skipping."; echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$REPO" ] || [ -z "$TOKEN" ]; then echo "BACKUP_REPO / BACKUP_REPO_TOKEN not set — skipping."; echo "run=false" >> "$GITHUB_OUTPUT"
+          else echo "run=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Pull encrypted snapshot from the VM
+        if: steps.gate.outputs.run == 'true'
+        env:
+          HOST: ${{ secrets.GCP_VM_HOST }}
+          USER: ${{ secrets.GCP_VM_USER }}
+          KEY: ${{ secrets.GCP_VM_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$KEY" > id_vm
+          # The remote script writes ONLY ciphertext to stdout; all messages go to
+          # stderr. stdout is captured to a file, never echoed, so the public log
+          # never sees conversation data (plaintext or encrypted).
+          ssh -i id_vm -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$USER@$HOST" 'bash -s' > snapshot.tar.enc <<'REMOTE'
+          set -euo pipefail
+          HH="$HOME/.hermes"
+          sudo systemctl start hermes-crypt >/dev/null 2>&1 || true
+          mountpoint -q "$HH" || gocryptfs -allow_other -passfile "$HOME/.hermes.key" "$HOME/.hermes.cipher" "$HH" >/dev/null 2>&1 || true
+          [ -f "$HOME/.hermes.key" ] || { echo "no ~/.hermes.key" >&2; exit 1; }
+          # Stage inside the encrypted mount, so no plaintext ever touches the disk.
+          T="$HH/.backup-stage"; rm -rf "$T"; mkdir -p "$T"; trap 'rm -rf "$T"' EXIT
+          PY="$HOME/hermes-env/bin/python"; [ -x "$PY" ] || PY=python3
+          if [ -f "$HH/state.db" ]; then
+            # Consistent snapshot even while the gateway is writing (SQLite backup API).
+            "$PY" - "$HH/state.db" "$T/state.db" <<'PYS'
+          import sqlite3, sys
+          src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+          dst = sqlite3.connect(sys.argv[2]); src.backup(dst); dst.close(); src.close()
+          PYS
+          fi
+          [ -d "$HH/memories" ] && cp -r "$HH/memories" "$T/" || true
+          [ -d "$HH/whatsapp/session" ] && mkdir -p "$T/whatsapp" && cp -r "$HH/whatsapp/session" "$T/whatsapp/" || true
+          date -u +%FT%TZ > "$T/BACKUP_TIME"
+          echo "snapshot: $(du -sh "$T" 2>/dev/null | cut -f1) ($(find "$T" -type f | wc -l) files)" >&2
+          tar -C "$T" -czf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass "file:$HOME/.hermes.key"
+          REMOTE
+          SIZE=$(stat -c%s snapshot.tar.enc)
+          echo "encrypted snapshot: ${SIZE} bytes"
+          [ "$SIZE" -gt 1000 ] || { echo "snapshot suspiciously small — not storing"; exit 1; }
+          rm -f id_vm
+
+      - name: Commit to the private backups repo (keep last 14)
+        if: steps.gate.outputs.run == 'true'
+        env:
+          REPO: ${{ vars.BACKUP_REPO }}
+          TOKEN: ${{ secrets.BACKUP_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 "https://x-access-token:${TOKEN}@github.com/${REPO}.git" backups 2>/dev/null \
+            || { mkdir backups && git -C backups init -q && git -C backups remote add origin "https://x-access-token:${TOKEN}@github.com/${REPO}.git"; }
+          cd backups
+          git config user.name "hermes-backup"; git config user.email "hermes-backup@users.noreply.github.com"
+          mkdir -p snapshots
+          cp ../snapshot.tar.enc "snapshots/hermes-$(date -u +%Y%m%d-%H%M).tar.enc"
+          # prune: keep the newest 14
+          ls -1 snapshots/hermes-*.tar.enc | sort | head -n -14 | xargs -r git rm -q --cached -- 2>/dev/null || true
+          ls -1 snapshots/hermes-*.tar.enc | sort | head -n -14 | xargs -r rm -f --
+          [ -f README.md ] || printf '# Hermes encrypted backups\n\nAES-256 snapshots made by the chat repo backup workflow. Decrypt only with HERMES_MEMORY_KEY (see chat/hermes/restore-backup.sh).\n' > README.md
+          git add -A
+          git commit -q -m "backup $(date -u +%F)" || { echo "nothing new"; exit 0; }
+          BR="$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
+          git push -q origin "HEAD:${BR}"
+          echo "stored $(ls snapshots | wc -l) snapshot(s)"
